@@ -5,6 +5,10 @@
         "interface/ftdi/esp32_devkitj_v1.cfg",
         "target/esp32s3.cfg"
     ],
-    "idf.portWin": "COM3",
-    "idf.toolsPathWin": "C:\\Users\\rrosa\\.espressif"
+    "idf.portWin": "COM6",
+    "idf.toolsPathWin": "C:\\Users\\rrosa\\.espressif",
+    "idf.flashType": "UART",
+    "files.associations": {
+        "*.inc": "cpp"
+    }
 }
