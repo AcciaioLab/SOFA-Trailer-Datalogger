@@ -9,6 +9,10 @@
     "idf.toolsPathWin": "C:\\Users\\rrosa\\.espressif",
     "idf.flashType": "UART",
     "files.associations": {
-        "*.inc": "cpp"
+        "*.inc": "cpp",
+        "esp_spi_flash.h": "c",
+        "spi_flash_mmap.h": "c",
+        "esp_psram.h": "c",
+        "random": "c"
     }
 }
