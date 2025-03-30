@@ -27,10 +27,24 @@
 * Definitions
 */ 
 
+// Board ID
+enum boardID
+{
+    BID_SPECIAL = 0,
+    BID_AXLE_1_R = 1,
+    BID_SPARE_1 = 2,
+    BID_AXLE_2_R = 3,
+    BID_AXLE_1_L = 4,
+    BID_SPARE_2 = 5,
+    BID_AXLE_2_L = 6,
+    BID_KING_PIN = 7
+};
+static enum boardID SOFA_DL_ID; // Given const CAPS because it is set once.
+
 // Logging Tags
-static const char *CON_ACCEL_TAG = "Axle_1_L_CON";
-static const char *I2C_ACCEL_TAG = "Axle_1_L_I2C";
-static const char *CAN_ACCEL_TAG = "Axle_1_L_CAN";
+static char *CON_ACCEL_TAG = "SOFA_DL_CON";
+static char *I2C_ACCEL_TAG = "SOFA_DL_I2C";
+static char *CAN_ACCEL_TAG = "SOFA_DL_CAN";
 
 // Tasks
 #define TASK_PRIORITY_ACCELI2C      13
@@ -41,11 +55,14 @@ static const char *CAN_ACCEL_TAG = "Axle_1_L_CAN";
 // Pins
 #define I2C_MASTER_SDA_GPIO         1                          // GPIO number used for I2C master clock
 #define I2C_MASTER_SCL_GPIO         2                          // GPIO number used for I2C master data
-#define CAN_RX_GPIO                 14                          
-#define CAN_TX_GPIO                 13
+#define CAN_RX_GPIO                 14                         // GPIO number used for CAN Rx
+#define CAN_TX_GPIO                 13                         // GPIO number used for CAN Tx
+#define ID_JUMPER_1_GPIO            12                         // GPIO number used for ID Jumper 1
+#define ID_JUMPER_2_GPIO            48                         // GPIO number used for ID Jumper 2
+#define ID_JUMPER_3_GPIO            47                         // GPIO number used for ID Jumper 3
 
 // Device Constants
-static const int startupDelay = 1;                             // Delay time at boot to line up with FMC650
+static const int STARTUP_DELAY = 3;                             // Delay time at boot to line up with FMC650
 
 // Queues and Semaphores
 // static QueueHandle_t CAN_rx_queue;
@@ -109,8 +126,8 @@ static const uint8_t XLDA = 0x01;
 #define ID_SLAVE_PING_RESP              0x0B2
 
 #define CAN_ID_ACCEL_RTR                0x0300
-#define CAN_ID_ACCEL_RESP               0x0101
-#define CAN_ID_TEST                     0x0333
+#define CAN_ID_ACCEL_RESP               0xFF0101FF
+#define CAN_ID_TEST                     0xFF0110FF
 
 /* 
  * I2C / Accelerometer data
@@ -199,12 +216,13 @@ static twai_message_t CAN_TEST = {
     .dlc_non_comp = 0,      // DLC is less than 8
     // Message ID and payload
     .identifier = CAN_ID_TEST,
-    .data_length_code = 4,
-    .data = {0xDE, 0xAD, 0xBE, 0xEF},
+    .data_length_code = 1,
+    .data = {0x00},   // This gets reversed in the FMC. 
 };
 
 // Function prototypes
 // Keeping everything in here and optimise code after it works
+int IDInit();
 int i2c_tx_check(i2c_1_reg_rw *data);
 esp_err_t accel_read_data(AccelData *data);
 int accel_align_data(AccelData *data);
@@ -262,7 +280,8 @@ void taskAccelI2C(void *pvParameters)
         }
 
         // DEBUG: Print out axis data in real number.
-        ESP_LOGI(I2C_ACCEL_TAG, "X/Y/Z axis reg %#04X %#04X %#06X | %#04X %#04X %#06X | %#04X %#04X %#06X = %.6f %.6f %.6f", acceldata.a[0], acceldata.a[1], acceldata.a_X, acceldata.a[2], acceldata.a[3], acceldata.a_Y, acceldata.a[4], acceldata.a[5], acceldata.a_Z, acceldata.A_X, acceldata.A_Y, acceldata.A_Z);
+        // ESP_LOGI(I2C_ACCEL_TAG, "X/Y/Z axis reg %#04X %#04X %#06X | %#04X %#04X %#06X | %#04X %#04X %#06X = %.6f %.6f %.6f", acceldata.a[0], acceldata.a[1], acceldata.a_X, acceldata.a[2], acceldata.a[3], acceldata.a_Y, acceldata.a[4], acceldata.a[5], acceldata.a_Z, acceldata.A_X, acceldata.A_Y, acceldata.A_Z);
+        ESP_LOGI(I2C_ACCEL_TAG, "ID: %d - X/Y/Z axis reg %#04X %#04X %#06X | %#04X %#04X %#06X | %#04X %#04X %#06X = %.6f %.6f %.6f", SOFA_DL_ID, acceldata.a[0], acceldata.a[1], acceldata.a_X, acceldata.a[2], acceldata.a[3], acceldata.a_Y, acceldata.a[4], acceldata.a[5], acceldata.a_Z, acceldata.A_X, acceldata.A_Y, acceldata.A_Z);
 
         // Move into CAN message.
         CAN_Data_Accelerometer.data[0] = acceldata.a[0];
@@ -271,7 +290,7 @@ void taskAccelI2C(void *pvParameters)
         CAN_Data_Accelerometer.data[3] = acceldata.a[3];
         CAN_Data_Accelerometer.data[4] = acceldata.a[4];
         CAN_Data_Accelerometer.data[5] = acceldata.a[5];
-        CAN_Data_Accelerometer.data[6] = 0xFF;
+        CAN_Data_Accelerometer.data[6] = SOFA_DL_ID;
 
         xSemaphoreGive(SEM_Accel_Data);
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -426,8 +445,9 @@ void taskCANCtrl(void *pvParameters)
 
             case CAN_RX_RTR_LISTEN:
                 // ESP_LOGI(CAN_ACCEL_TAG, "CANBUS control task waiting for RTR.");
+                CAN_TEST.data[0] = CAN_TEST.data[0] + 1;
                 twai_transmit(&CAN_TEST, portMAX_DELAY);
-                ESP_LOGI(CAN_ACCEL_TAG, "CANBUS control task sent CAN_TEST.");
+                ESP_LOGI(CAN_ACCEL_TAG, "CANBUS control task sent CAN_TEST, %d", CAN_TEST.data[0]);
 
                 // //
                 // xSemaphoreTake(SEM_CAN_Control, portMAX_DELAY);
@@ -466,11 +486,15 @@ void taskCANCtrl(void *pvParameters)
 void app_main(void)
 {
     // Delay the start of the device to line up with the FMC650
-    for (int i = 0; i < startupDelay; i++)
+    for (int i = STARTUP_DELAY; i > 0; i--)
     {
-        ESP_LOGI(CON_ACCEL_TAG, "Device starting in %d\n", i);
+        ESP_LOGI(CON_ACCEL_TAG, "Device starting in %d", i);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+
+    // Configure the GPIOs for ID
+    // Read and set this board's ID
+    IDInit();
 
     // Semaphores and queues
     // CAN_rx_queue = xQueueCreate(1, sizeof(CAN_rx_actions));
@@ -519,6 +543,86 @@ void app_main(void)
     // Don't need to start the scheduler - it starts automatically.
     // vTaskStartScheduler();
     
+}
+
+int IDInit()
+{
+    
+    // Create and set the GPIO config structure for the ID jumper inputs
+    gpio_config_t input_config = {};
+    input_config.intr_type = GPIO_INTR_DISABLE;
+    input_config.mode = GPIO_MODE_INPUT;
+    input_config.pin_bit_mask = (1ULL << ID_JUMPER_1_GPIO) | (1ULL << ID_JUMPER_2_GPIO) | (1ULL << ID_JUMPER_3_GPIO);
+    input_config.pull_down_en = 0;
+    input_config.pull_up_en = 1;
+    gpio_config(&input_config);
+
+    // Delay before read
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    int jumper = 0;
+    // Read the jumper pins and add to find the ID.
+    // As it's pull up inverted with ! so it aligns with jumper sets that bit.
+    int jumper1 = !gpio_get_level(ID_JUMPER_1_GPIO);
+    int jumper2 = !gpio_get_level(ID_JUMPER_2_GPIO);
+    int jumper3 = !gpio_get_level(ID_JUMPER_3_GPIO);
+    // Weighted binary from jumpers.
+    jumper = (4 * jumper1) + (2 * jumper2) + (1 * jumper3);
+
+    // Based on the jumpers set, set the board ID.
+    switch(jumper)
+    {
+        case 0:
+            // SPECIAL
+            SOFA_DL_ID = BID_SPECIAL;
+            break;
+
+        case 1:
+            // Axle 1 Right
+            SOFA_DL_ID = BID_AXLE_1_R;
+            break;
+        
+        case 2:
+            // SPARE 1
+            SOFA_DL_ID = BID_SPARE_1;
+            break;
+        
+        case 3:
+            // Axle 2 Right
+            SOFA_DL_ID = BID_AXLE_2_R;
+            break;
+
+        case 4:
+            // Axle 1 Left
+            SOFA_DL_ID = BID_AXLE_1_L;
+            break;
+
+        case 5:
+            // SPARE 2
+            SOFA_DL_ID = BID_SPARE_2;
+            break;
+
+        case 6:
+            // Axle 2 Left
+            SOFA_DL_ID = BID_AXLE_2_L;
+            break;
+
+        case 7:
+            // Kingpin
+            SOFA_DL_ID = BID_KING_PIN;
+            break;
+        
+        default:
+            // error
+            SOFA_DL_ID = BID_SPARE_1;
+            break;
+    }
+
+    // DEBUG
+    ESP_LOGI(CON_ACCEL_TAG, "ID: %d - ID jumper set %d%d%d %d.\n", SOFA_DL_ID, jumper1, jumper2, jumper3, jumper);
+
+    // TODO: return status
+    return 0;
 }
 
 int i2c_tx_check(i2c_1_reg_rw *data)
@@ -611,15 +715,27 @@ void accel_tx_config1(void)
 {
     // Configure the accelerometer before reading data.
     // TX2 - Config 1
-    i2c_1_reg_rw tx1_config1 = {
-        .tx = {0x10, 0x4C},
+    i2c_1_reg_rw tx_config1 = {
+        .tx = {0x10, 0x5C},
         .rx = 0x00,
         .err = ESP_FAIL
     };
 
     // CTRL1_XL 0x10 Accelerometer control register 1 (R/W)
-    // 104Hz normal mode, +/- 8g
-    i2c_tx_check(&tx1_config1);
+    // 208Hz normal mode, +/- 8g
+    i2c_tx_check(&tx_config1);
+
+    // Configure the gyro before reading data.
+    // TX2 - Config 2
+    i2c_1_reg_rw tx_config2 = {
+        .tx = {0x11, 0x48},
+        .rx = 0x00,
+        .err = ESP_FAIL
+    };
+
+    // CTRL2_G 0x11 Gyroscope control register 2 (R/W)
+    // 208Hz normal mode, +/- 1000dps
+    i2c_tx_check(&tx_config2);
 }
 
 int accel_tx_selftest(void)
