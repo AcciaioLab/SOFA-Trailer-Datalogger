@@ -360,9 +360,16 @@ void taskCANRx(void *pvParameters)
         // Check what action was required.
         if (actions == CAN_RX_RTR_LISTEN)
         {
+            // This is template code for if receiving is required.
+            // FMC will only listen for messages from SOFA DL.
             xSemaphoreTake(SEM_CAN_Control, portMAX_DELAY);
             ESP_LOGI(CAN_ACCEL_TAG, "CANBUS receive task received action CAN_RX_RTR %d.", actions);
+            // Give the semaphore back if it has it for some reason.
+            // When this task is needed, this will need to be updated.
+            xSemaphoreGive(SEM_CAN_Control);
+
             twai_message_t received_msg;
+            
             while (1)
             {
                 // Waiting to receive request
@@ -513,7 +520,7 @@ void app_main(void)
     
     // Tasks
     xTaskCreatePinnedToCore(taskAccelI2C, "Accel_Data_I2C", 4096, NULL, TASK_PRIORITY_ACCELI2C, NULL, 1); // on its own core
-    // xTaskCreatePinnedToCore(taskCANRx, "CANBus_Rx", 4096, NULL, TASK_PRIORITY_CAN_RX, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(taskCANRx, "CANBus_Rx", 4096, NULL, TASK_PRIORITY_CAN_RX, NULL, tskNO_AFFINITY);
     xTaskCreatePinnedToCore(taskCANTx, "CANBus_Tx", 4096, NULL, TASK_PRIORITY_CAN_TX, NULL, tskNO_AFFINITY);
     xTaskCreatePinnedToCore(taskCANCtrl, "CANBus_Ctrl", 4096, NULL, TASK_PRIORITY_CAN_CTRL, NULL, tskNO_AFFINITY);
 
