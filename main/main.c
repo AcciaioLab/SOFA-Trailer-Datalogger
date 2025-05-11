@@ -2,7 +2,7 @@
  * SOFA TRAILER DATALOGGER
  * 
  * Connects and reads accelerometer data from LSM6DSOX via I2C.
- * Responds to CANBus requests and sends to Teletonika.
+ * Sends the accelerometer and gyroscope data to the FMC650 via CANBus.
  *
  * Based on twai_network_example_slave and twai_network_example_master for CAN bus comms
  * Based on i2c_basic_example for I2C comms
@@ -48,7 +48,7 @@ static char *CON_ACCEL_TAG = "SOFA_DL_CON";
 static char *I2C_ACCEL_TAG = "SOFA_DL_I2C";
 static char *CAN_ACCEL_TAG = "SOFA_DL_CAN";
 
-// IDs
+// Board IDs
 uint32_t CAN_ID_Accel = 0xFFFFFFFF;
 uint32_t CAN_ID_Gyro = 0xFFFFFFFF;
 
@@ -68,7 +68,7 @@ uint32_t CAN_ID_Gyro = 0xFFFFFFFF;
 #define ID_JUMPER_3_GPIO            47                         // GPIO number used for ID Jumper 3
 
 // Device Constants
-static const int STARTUP_DELAY = 3;                             // Delay time at boot to line up with FMC650
+static const int STARTUP_DELAY = 10;                             // Delay time at boot to line up with FMC650
 
 // Queues and Semaphores
 static QueueHandle_t CAN_rx_queue;
@@ -78,6 +78,7 @@ static SemaphoreHandle_t SEM_Accel_Data;
 static SemaphoreHandle_t SEM_CAN_Control;
 static SemaphoreHandle_t SEM_Done;
 
+// Task control enum
 typedef enum {
     CAN_INIT,
     CAN_CTRL_IDLE,
@@ -91,8 +92,8 @@ typedef enum {
 /* 
  * I2C / Accelerometer constants
  */
-// I2C Master
 
+// I2C Master
 #define I2C_MASTER_NUM              0                           // I2C port number for master dev
 #define I2C_MASTER_FREQ_HZ          CONFIG_I2C_MASTER_FREQUENCY // I2C master clock frequency
 #define I2C_MASTER_TX_BUF_DISABLE   0                           // I2C master doesn't need buffer
@@ -364,12 +365,13 @@ void taskCANRx(void *pvParameters)
             // FMC will only listen for messages from SOFA DL.
             xSemaphoreTake(SEM_CAN_Control, portMAX_DELAY);
             ESP_LOGI(CAN_ACCEL_TAG, "CANBUS receive task received action CAN_RX_RTR %d.", actions);
+
             // Give the semaphore back if it has it for some reason.
             // When this task is needed, this will need to be updated.
             xSemaphoreGive(SEM_CAN_Control);
 
             twai_message_t received_msg;
-            
+
             while (1)
             {
                 // Waiting to receive request
@@ -391,8 +393,16 @@ void taskCANTx(void *pvParameters)
     {
         // DEBUG counter
         twai_transmit(&CAN_TEST, portMAX_DELAY);
-        ESP_LOGI(CAN_ACCEL_TAG, "CANBUS transmit task sent CAN_TEST, %d", CAN_TEST.data[0]);
+        ESP_LOGI(CAN_ACCEL_TAG, "CANBUS transmit task sent CAN_TEST, %u", (CAN_TEST.data[1]+CAN_TEST.data[0]));
+        if (CAN_TEST.data[0] == 0xFF)
+        {
+            CAN_TEST.data[1] = CAN_TEST.data[1] + 1;
+        }
         CAN_TEST.data[0] = CAN_TEST.data[0] + 1;
+        // CAN_TEST.data[0] = 0xDE;
+        // CAN_TEST.data[1] = 0xAD;
+        // CAN_TEST.data[2] = 0xBE;
+        // CAN_TEST.data[3] = 0xEF;
 
         // Read the queue to see if a transmit action is required.
         CAN_control_actions actions;
