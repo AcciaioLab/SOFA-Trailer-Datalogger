@@ -11,7 +11,7 @@ managed_components
 # sdkconfig.old
 
 # VS Code Settings
-.vscode/
+.vscode
 
 # Results for the checking of the Python coding style and static analysis
 .mypy_cache
