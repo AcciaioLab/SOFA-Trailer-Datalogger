@@ -1,6 +1,58 @@
 #ifndef I2C_H
 #define I2C_H
 
-int i2cTestFunction(void);
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+#include "sdkconfig.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include "driver/gpio.h"
+#include "driver/i2c_master.h"
+
+static char *I2C_DRIVER_TAG = "SOFA_DL_I2C";
+
+extern i2c_master_bus_config_t i2c_master_config;
+extern i2c_master_bus_handle_t i2c_bus_handle;
+extern i2c_device_config_t i2c_accel_cfg;
+extern i2c_master_dev_handle_t i2c_accel_handle;
+
+/* 
+ * I2C / Accelerometer constants
+ */
+// Pins
+#define I2C_MASTER_SDA_GPIO         1                          // GPIO number used for I2C master clock
+#define I2C_MASTER_SCL_GPIO         2                          // GPIO number used for I2C master data
+
+// I2C Master
+#define I2C_MASTER_NUM              0                           // I2C port number for master dev
+#define I2C_MASTER_FREQ_HZ          CONFIG_I2C_MASTER_FREQUENCY // I2C master clock frequency
+#define I2C_MASTER_TX_BUF_DISABLE   0                           // I2C master doesn't need buffer
+#define I2C_MASTER_RX_BUF_DISABLE   0                           // I2C master doesn't need buffer
+#define I2C_MASTER_TIMEOUT_MS       1000
+
+// I2C Accelerometer
+#define ACCEL_ADDR                  0x6A                       // Accelerometer I2C address
+
+typedef struct {
+    uint8_t tx;     // Register address
+    uint8_t rx;     // Received data
+    uint8_t success; // If the response is known to compare
+    esp_err_t err;
+} i2cRead1Reg;
+
+typedef struct {
+    uint8_t tx[2];  // Register address, data to write
+    uint8_t rx;     // Received data
+    esp_err_t err;
+} i2cWrite1Reg;
+
+// Function Prototypes
+void imuWhoami(void);
+void imuConfig(void);
+int i2cTransmitReg(i2cWrite1Reg *data);
+uint8_t imuSelfTestA(void);
+uint8_t imuSelfTestG(void);
 
 #endif

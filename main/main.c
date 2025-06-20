@@ -63,8 +63,6 @@ uint32_t CAN_ID_Gyro = 0xFFFFFFFF;
 #define TASK_PRIORITY_CAN_CTRL      12
 
 // Pins
-#define I2C_MASTER_SDA_GPIO         1                          // GPIO number used for I2C master clock
-#define I2C_MASTER_SCL_GPIO         2                          // GPIO number used for I2C master data
 #define CAN_RX_GPIO                 14                         // GPIO number used for CAN Rx
 #define CAN_TX_GPIO                 13                         // GPIO number used for CAN Tx
 #define ID_JUMPER_1_GPIO            12                         // GPIO number used for ID Jumper 1
@@ -96,17 +94,6 @@ typedef enum {
 /* 
  * I2C / Accelerometer constants
  */
-
-// I2C Master
-#define I2C_MASTER_NUM              0                           // I2C port number for master dev
-#define I2C_MASTER_FREQ_HZ          CONFIG_I2C_MASTER_FREQUENCY // I2C master clock frequency
-#define I2C_MASTER_TX_BUF_DISABLE   0                           // I2C master doesn't need buffer
-#define I2C_MASTER_RX_BUF_DISABLE   0                           // I2C master doesn't need buffer
-#define I2C_MASTER_TIMEOUT_MS       1000
-
-// I2C Accelerometer
-#define ACCEL_ADDR                  0x6A                       // Accelerometer I2C address
-
 // Accelerometer data conversion - unused comment out
 static const float ACCEL_SCALE_4 = 0.000122;    // +/-4 LSB value
 static const float ACCEL_SCALE_8 = 0.000244;    // +/-8 LSB value
@@ -138,29 +125,6 @@ uint32_t CAN_ID_GYRO_DATA = 0xFFFFFFFF;     // Variable to be setup as part of b
 
 #define CAN_ID_TEST                     0xFF0333FF
 
-/* 
- * I2C / Accelerometer data
- */
-static i2c_master_bus_config_t i2c_master_config = 
-{
-    .clk_source = I2C_CLK_SRC_DEFAULT,
-    .i2c_port = I2C_MASTER_NUM,
-    .scl_io_num = I2C_MASTER_SCL_GPIO,
-    .sda_io_num = I2C_MASTER_SDA_GPIO,
-    .glitch_ignore_cnt = 7,
-    .flags.enable_internal_pullup = true,
-};
-
-static i2c_master_bus_handle_t i2c_bus_handle;
-
-static i2c_device_config_t i2c_accel_cfg = {
-    .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-    .device_address = ACCEL_ADDR,
-    .scl_speed_hz = 100000,
-};
-
-static i2c_master_dev_handle_t i2c_accel_handle;
-
 typedef struct {
     uint8_t reg;
     size_t length;
@@ -169,19 +133,6 @@ typedef struct {
     float mX, mY, mZ;
     esp_err_t err;
 } IMUMeasureData;
-
-typedef struct {
-    uint8_t tx;     // Register address
-    uint8_t rx;     // Received data
-    uint8_t success; // If the response is known to compare
-    esp_err_t err;
-} i2cRead1Reg;
-
-typedef struct {
-    uint8_t tx[2];  // Register address, data to write
-    uint8_t rx;     // Received data
-    esp_err_t err;
-} i2cWrite1Reg;
 
 /* 
  * CAN BUS data
@@ -218,9 +169,8 @@ static twai_message_t CAN_TEST = {
     .data = {0x00, 0x00, 0x00, 0x00},   // This gets reversed in the FMC. 
 };
 
-/*  Function prototypes
-*   Keeping everything in here and optimise code after it works
-*
+/*  
+*   Function prototypes
 */ 
 
 // Configures jumper GPIOs and sets the board ID.
@@ -231,12 +181,6 @@ int setCANMessageID(twai_message_t *message, uint32_t id, uint8_t length);
 esp_err_t accel_read_data(IMUMeasureData *data);
 esp_err_t gyro_read_data(IMUMeasureData *data);
 int imuFormatData(IMUMeasureData *data, float scale);
-void imuWhoami(void);
-void imuConfig(void);
-uint8_t imuSelfTestA(void);
-uint8_t imuSelfTestG(void);
-
-int i2cTransmitReg(i2cWrite1Reg *data);
 
 void taskIMU(void *pvParameters)
 {
@@ -680,26 +624,6 @@ int setCANMessageID(twai_message_t *message, uint32_t id, uint8_t length)
     return 0;
 }
 
-int i2cTransmitReg(i2cWrite1Reg *data)
-{
-    // This function bundles writing data to a register over i2c and then reading that same register
-    // to make sure it wrote.
-    i2c_master_transmit(i2c_accel_handle, data->tx, 2, -1);
-
-    // Check the value we sent wrote to register 0x10
-    data->err = i2c_master_transmit_receive(i2c_accel_handle, &data->tx[0], sizeof(data->tx[0]), &data->rx, 1, -1);
-    if (data->err == ESP_OK)
-    {
-        if (data->rx != data->tx[1])
-        {
-            ESP_LOGI(I2C_ACCEL_TAG, "Couldn't write to register 0x%X.", data->tx[0]);
-            return -1;
-        }
-        ESP_LOGI(I2C_ACCEL_TAG, "Wrote 0x%X to register 0x%X.", data->rx, data->tx[0]);
-    }
-    return 0;
-}
-
 esp_err_t accel_read_data(IMUMeasureData *data)
 {
     esp_err_t accel_i2c_err;
@@ -765,366 +689,4 @@ int imuFormatData(IMUMeasureData *data, float scale)
     data->mZ = ((float)data->mz) * scale;
 
     return 0;
-}
-
-void imuWhoami(void)
-{
-    // Create the data for this read.
-    // TX1 - Who Am I
-    i2cRead1Reg whoami = {
-        .tx = 0x0F,     // Who Am I register
-        .rx = 0x00,     // Expecting 0x6C
-        .success = 0x6C,
-        .err = ESP_FAIL
-    };  
-
-    // Read the WHO_AM_I (0x0F) register to see if we can see the accelerometer.
-    // WHO_AM_I returns 0x6C.
-    while (whoami.rx != 0x6C)
-    {
-        whoami.err = i2c_master_transmit_receive(i2c_accel_handle, &whoami.tx, sizeof(whoami.tx), &whoami.rx, 1, -1);
-        ESP_LOGI(I2C_ACCEL_TAG, "Connecting to accelerometer on I2C bus at address 0x6A.");
-    }
-
-    // Log that we saw the accelerometer
-    ESP_LOGI(I2C_ACCEL_TAG, "I2C initialized successfully. WHO AM I = 0x%X", whoami.rx);
-    
-    // Reset in case we need to use it again
-    whoami.rx = 0x00;
-}
-
-void imuConfig(void)
-{
-    // Configure the accelerometer before reading data.
-
-    // Config 1
-    // CTRL1_XL 0x10 Accelerometer control register 1 (R/W)
-    // 104Hz high-performance mode, +/- 8g. 
-    i2cWrite1Reg config1 = {
-        .tx = {0x10, 0x4C},
-        .rx = 0x00,
-        .err = ESP_FAIL
-    };
-    
-    i2cTransmitReg(&config1);
-
-    // Config 2
-    // CTRL2_G 0x11 Gyroscope control register 2 (R/W)
-    // 104Hz high-performance mode, +/- 1000dps
-    i2cWrite1Reg config2 = {
-        .tx = {0x11, 0x48},
-        .rx = 0x00,
-        .err = ESP_FAIL
-    };
-
-    i2cTransmitReg(&config2);
-}
-
-uint8_t imuSelfTestA(void)
-{
-    // Accelerometer UI self-test mode 1
-    // Datasheet section 11.
-    ESP_LOGI(I2C_ACCEL_TAG, "Accelerometer self-test started.");
-    int result = 0;
-
-    esp_err_t i2c_err;
-
-    IMUMeasureData selftest_acceldata = {
-        .reg = 0x28,    // accel x axis reg, y follows 0x2A, z follows 0x2C
-        .length = 6,    // read all accel data in 1 go
-        .err = ESP_FAIL
-    };
-
-    float OUTX_NOST = 0.0f;
-    float OUTY_NOST = 0.0f;
-    float OUTZ_NOST = 0.0f;
-    float OUTX_ST = 0.0f;
-    float OUTY_ST = 0.0f;
-    float OUTZ_ST = 0.0f;
-
-    // Initialise and turn on sensor
-    i2cWrite1Reg tx_st_1 = {
-        .tx = {0x10, 0x38},
-        .rx = 0x00,
-        .err = ESP_FAIL
-    };
-
-    for (int i = 0; i < 10; i++)
-    {
-        tx_st_1.tx[0] = 0x10 + i;
-        if (tx_st_1.tx[0] == 0x10)
-        {
-            tx_st_1.tx[1] = 0x38;
-        }
-        else if (tx_st_1.tx[0] == 0x12)
-        {
-            tx_st_1.tx[1] = 0x44;
-        }
-        else
-        {
-            tx_st_1.tx[1] = 0x00;
-        }
-        
-        i2cTransmitReg(&tx_st_1);
-    }
-
-    // Power up, wait 100ms for stable output
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    // Read accelerometer data once, discard.
-    i2c_err = accel_read_data(&selftest_acceldata);
-
-    for (int i = 0; i < 5; i++)
-    {
-        // Read the data
-        i2c_err = accel_read_data(&selftest_acceldata);
-        imuFormatData(&selftest_acceldata, ACCEL_SCALE_4);
-        // Compute the average of each axis and store in _NOST.
-        // Each read add to _NOST, divide by 5 at end.
-        OUTX_NOST = OUTX_NOST + selftest_acceldata.mX;
-        OUTY_NOST = OUTY_NOST + selftest_acceldata.mY;
-        OUTZ_NOST = OUTZ_NOST + selftest_acceldata.mZ;
-
-        // DEBUG
-        ESP_LOGI(I2C_ACCEL_TAG, "_NOST %d: %.6f \t %.6f \t %.6f", i, OUTX_NOST, OUTY_NOST, OUTZ_NOST);
-    }
-    // Compute average
-    OUTX_NOST = OUTX_NOST / 5;
-    OUTY_NOST = OUTY_NOST / 5;
-    OUTZ_NOST = OUTZ_NOST / 5;
-
-    // DEBUG
-    ESP_LOGI(I2C_ACCEL_TAG, "_NOST AVG: %.6f \t %.6f \t %.6f", OUTX_NOST, OUTY_NOST, OUTZ_NOST);
-
-    // Enable accelerometer self-test
-    i2cWrite1Reg tx_st_2 = {
-        .tx = {0x14, 0x01},
-        .rx = 0x00,
-        .err = ESP_FAIL
-    };
-    i2cTransmitReg(&tx_st_2);
-
-    // Wait 100ms for stable output
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    // Read accelerometer data once, discard.
-    i2c_err = accel_read_data(&selftest_acceldata);
-
-    for (int i = 0; i < 5; i++)
-    {
-        // Read the data
-        i2c_err = accel_read_data(&selftest_acceldata);
-        imuFormatData(&selftest_acceldata, ACCEL_SCALE_4);
-        // Compute the average of each axis and store in _ST.
-        // Each read add to _ST, divide by 5 at end.
-        OUTX_ST = OUTX_ST + selftest_acceldata.mX;
-        OUTY_ST = OUTY_ST + selftest_acceldata.mY;
-        OUTZ_ST = OUTZ_ST + selftest_acceldata.mZ;
-
-        // DEBUG 
-        // ESP_LOGI(I2C_ACCEL_TAG, "_ST %d: %.6f \t %.6f \t %.6f", i, selftest_acceldata.A_X, selftest_acceldata.A_Y, selftest_acceldata.A_Z);
-        ESP_LOGI(I2C_ACCEL_TAG, "_ST %d: %.6f \t %.6f \t %.6f", i, OUTX_ST, OUTY_ST, OUTZ_ST);
-    }
-    // Compute average
-    OUTX_ST = OUTX_ST / 5;
-    OUTY_ST = OUTY_ST / 5;
-    OUTZ_ST = OUTZ_ST / 5;
-
-    // DEBUG
-    ESP_LOGI(I2C_ACCEL_TAG, "_ST AVG: %.6f \t %.6f \t %.6f", OUTX_ST, OUTY_ST, OUTZ_ST);
-
-    // Check that each axis is within the self-test range
-    float range_ST_X = fabsf(OUTX_ST - OUTX_NOST);
-    float range_ST_Y = fabsf(OUTY_ST - OUTY_NOST);
-    float range_ST_Z = fabsf(OUTZ_ST - OUTZ_NOST);
-
-    // I'm cheating here because I know the min and max are declared as positive, so leave off the abs.
-    // X-axis in range
-    if ((range_ST_X >= A_ST_MIN) && (range_ST_X <= A_ST_MAX))
-    {
-        // Y-axis in range
-        if ((range_ST_Y >= A_ST_MIN) && (range_ST_Y <= A_ST_MAX))
-        {
-            // Z-axis in range
-            if ((range_ST_Z >= A_ST_MIN) && (range_ST_Z <= A_ST_MAX))
-            {
-                result = 1;
-            }
-        }
-    }
-
-    if (result)
-    {
-        ESP_LOGI(I2C_ACCEL_TAG, "Accelerometer self-test PASSED.");
-    }
-    else
-    {
-        ESP_LOGI(I2C_ACCEL_TAG, "Accelerometer self-test FAILED.");
-    }
-
-    // Disable self-test
-    tx_st_2.tx[0] = 0x14;
-    tx_st_2.tx[1] = 0x00;
-    i2cTransmitReg(&tx_st_2);
-
-    // Disable sensor, ready for config.
-    tx_st_1.tx[0] = 0x10;
-    tx_st_1.tx[1] = 0x00;
-    i2cTransmitReg(&tx_st_1);
-
-    return result;
-}
-
-uint8_t imuSelfTestG(void)
-{
-    // Gyroscope UI self-test mode 1
-    // Datasheet section 11.
-    ESP_LOGI(I2C_ACCEL_TAG, "Gyroscope self-test started.");
-    int result = 0;
-
-    esp_err_t i2c_err;
-
-    IMUMeasureData selftest_gyrodata = {
-        .reg = 0x22,    // gyro x axis reg, y follows 0x24, z follows 0x26
-        .length = 6,    // read all gyro data in 1 go
-        .err = ESP_FAIL
-    };
-
-    float OUTX_NOST = 0.0f;
-    float OUTY_NOST = 0.0f;
-    float OUTZ_NOST = 0.0f;
-    float OUTX_ST = 0.0f;
-    float OUTY_ST = 0.0f;
-    float OUTZ_ST = 0.0f;
-
-    // Initialise and turn on sensor
-    i2cWrite1Reg tx_st_1 = {
-        .tx = {0x10, 0x00},
-        .rx = 0x00,
-        .err = ESP_FAIL
-    };
-
-    for (int i = 0; i < 10; i++)
-    {
-        tx_st_1.tx[0] = 0x10 + i;
-        if (tx_st_1.tx[0] == 0x11)
-        {
-            tx_st_1.tx[1] = 0x5C;
-        }
-        else if (tx_st_1.tx[0] == 0x12)
-        {
-            tx_st_1.tx[1] = 0x44;
-        }
-        else
-        {
-            tx_st_1.tx[1] = 0x00;
-        }
-        
-        i2cTransmitReg(&tx_st_1);
-    }
-
-    // Power up, wait 100ms for stable output
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    // Read gyro data once, discard.
-    i2c_err = gyro_read_data(&selftest_gyrodata);
-
-    for (int i = 0; i < 5; i++)
-    {
-        // Read the data
-        i2c_err = gyro_read_data(&selftest_gyrodata);
-        imuFormatData(&selftest_gyrodata, GYRO_SCALE_2000);
-        // Compute the average of each axis and store in _NOST.
-        // Each read add to _NOST, divide by 5 at end.
-        OUTX_NOST = OUTX_NOST + selftest_gyrodata.mX;
-        OUTY_NOST = OUTY_NOST + selftest_gyrodata.mY;
-        OUTZ_NOST = OUTZ_NOST + selftest_gyrodata.mZ;
-
-        // DEBUG
-        ESP_LOGI(I2C_ACCEL_TAG, "_NOST %d: %.6f \t %.6f \t %.6f", i, OUTX_NOST, OUTY_NOST, OUTZ_NOST);
-    }
-    // Compute average
-    OUTX_NOST = OUTX_NOST / 5;
-    OUTY_NOST = OUTY_NOST / 5;
-    OUTZ_NOST = OUTZ_NOST / 5;
-
-    // DEBUG
-    ESP_LOGI(I2C_ACCEL_TAG, "_NOST AVG: %.6f \t %.6f \t %.6f", OUTX_NOST, OUTY_NOST, OUTZ_NOST);
-
-    // Enable gyro self-test
-    i2cWrite1Reg tx_st_2 = {
-        .tx = {0x14, 0x04},
-        .rx = 0x00,
-        .err = ESP_FAIL
-    };
-    i2cTransmitReg(&tx_st_2);
-
-    // Wait 100ms for stable output
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    // Read accelerometer data once, discard.
-    i2c_err = gyro_read_data(&selftest_gyrodata);
-
-    for (int i = 0; i < 5; i++)
-    {
-        // Read the data
-        i2c_err = gyro_read_data(&selftest_gyrodata);
-        imuFormatData(&selftest_gyrodata, GYRO_SCALE_2000);
-        // Compute the average of each axis and store in _ST.
-        // Each read add to _ST, divide by 5 at end.
-        OUTX_ST = OUTX_ST + selftest_gyrodata.mX;
-        OUTY_ST = OUTY_ST + selftest_gyrodata.mY;
-        OUTZ_ST = OUTZ_ST + selftest_gyrodata.mZ;
-
-        // DEBUG 
-        ESP_LOGI(I2C_ACCEL_TAG, "_ST %d: %.6f \t %.6f \t %.6f", i, OUTX_ST, OUTY_ST, OUTZ_ST);
-    }
-    // Compute average
-    OUTX_ST = OUTX_ST / 5;
-    OUTY_ST = OUTY_ST / 5;
-    OUTZ_ST = OUTZ_ST / 5;
-
-    // DEBUG
-    ESP_LOGI(I2C_ACCEL_TAG, "_ST AVG: %.6f \t %.6f \t %.6f", OUTX_ST, OUTY_ST, OUTZ_ST);
-
-    // Check that each axis is within the self-test range
-    float range_ST_X = fabsf(OUTX_ST - OUTX_NOST);
-    float range_ST_Y = fabsf(OUTY_ST - OUTY_NOST);
-    float range_ST_Z = fabsf(OUTZ_ST - OUTZ_NOST);
-
-    // I'm cheating here because I know the min and max are declared as positive, so leave off the abs.
-    // X-axis in range
-    if ((range_ST_X >= G_ST_MIN_2000) && (range_ST_X <= G_ST_MAX_2000))
-    {
-        // Y-axis in range
-        if ((range_ST_Y >= G_ST_MIN_2000) && (range_ST_Y <= G_ST_MAX_2000))
-        {
-            // Z-axis in range
-            if ((range_ST_Z >= G_ST_MIN_2000) && (range_ST_Z <= G_ST_MAX_2000))
-            {
-                result = 1;
-            }
-        }
-    }
-
-    if (result)
-    {
-        ESP_LOGI(I2C_ACCEL_TAG, "Gyroscope self-test PASSED.");
-    }
-    else
-    {
-        ESP_LOGI(I2C_ACCEL_TAG, "Gyroscope self-test FAILED.");
-    }
-
-    // Disable self-test
-    tx_st_2.tx[0] = 0x14;
-    tx_st_2.tx[1] = 0x00;
-    i2cTransmitReg(&tx_st_2);
-
-    // Disable sensor, ready for config.
-    tx_st_1.tx[0] = 0x11;
-    tx_st_1.tx[1] = 0x00;
-    i2cTransmitReg(&tx_st_1);
-
-    return result;
 }
