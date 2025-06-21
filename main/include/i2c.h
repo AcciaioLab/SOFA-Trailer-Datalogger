@@ -6,12 +6,16 @@
 #include <math.h>
 
 #include "sdkconfig.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 
-static char *I2C_DRIVER_TAG = "SOFA_DL_I2C";
+static char *I2C_DRIVER_TAG = "SOFA_DL_DRV_I2C";
 
 extern i2c_master_bus_config_t i2c_master_config;
 extern i2c_master_bus_handle_t i2c_bus_handle;
@@ -38,7 +42,6 @@ extern i2c_master_dev_handle_t i2c_accel_handle;
 typedef struct {
     uint8_t tx;     // Register address
     uint8_t rx;     // Received data
-    uint8_t success; // If the response is known to compare
     esp_err_t err;
 } i2cRead1Reg;
 
@@ -48,11 +51,18 @@ typedef struct {
     esp_err_t err;
 } i2cWrite1Reg;
 
+typedef struct {
+    uint8_t reg;
+    size_t length;
+    uint8_t m[6]; 
+    esp_err_t err;
+} i2cReadIMUReg;
+
 // Function Prototypes
-void imuWhoami(void);
-void imuConfig(void);
+int i2cBusStart(void);
+int i2cBusEnd(void);
 int i2cTransmitReg(i2cWrite1Reg *data);
-uint8_t imuSelfTestA(void);
-uint8_t imuSelfTestG(void);
+int i2cReadReg(i2cRead1Reg *data);
+int i2cReadDataReg(i2cReadIMUReg *data);
 
 #endif

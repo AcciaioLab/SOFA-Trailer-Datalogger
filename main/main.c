@@ -28,6 +28,7 @@
 #include "esp_timer.h"
 
 #include "include/i2c.h"
+#include "include/sofa.h"
 
 /*
 * Definitions
@@ -48,8 +49,9 @@ enum boardID
 static enum boardID SOFA_DL_ID; // Given const CAPS because it is set once.
 
 // Logging Tags
-static char *CON_ACCEL_TAG = "SOFA_DL_CON";
-static char *I2C_ACCEL_TAG = "SOFA_DL_I2C";
+static char *SOFA_DL_SYS = "SOFA_DL_SYS";
+static char *SOFA_DL_I2C = "SOFA_DL_I2C";
+static char *SOFA_DL_IMU = "SOFA_DL_IMU";
 static char *CAN_ACCEL_TAG = "SOFA_DL_CAN";
 
 // Board IDs
@@ -57,22 +59,27 @@ uint32_t CAN_ID_Accel = 0xFFFFFFFF;
 uint32_t CAN_ID_Gyro = 0xFFFFFFFF;
 
 // Tasks
-#define TASK_PRIORITY_ACCELI2C      13
-#define TASK_PRIORITY_CAN_RX        9
-#define TASK_PRIORITY_CAN_TX        11
-#define TASK_PRIORITY_CAN_CTRL      12
+#define TASK_PRIORITY_I2C 5
+#define TASK_PRIORITY_IMU 13
+#define TASK_PRIORITY_CAN_RX 9
+#define TASK_PRIORITY_CAN_TX 11
+#define TASK_PRIORITY_CAN_CTRL 12
+
+#define ESP_INTR_FLAG_DEFAULT 0
 
 // Pins
-#define CAN_RX_GPIO                 14                         // GPIO number used for CAN Rx
-#define CAN_TX_GPIO                 13                         // GPIO number used for CAN Tx
-#define ID_JUMPER_1_GPIO            12                         // GPIO number used for ID Jumper 1
-#define ID_JUMPER_2_GPIO            48                         // GPIO number used for ID Jumper 2
-#define ID_JUMPER_3_GPIO            47                         // GPIO number used for ID Jumper 3
+#define CAN_RX_GPIO 14 // GPIO used for CAN Rx
+#define CAN_TX_GPIO 13 // GPIO used for CAN Tx
+#define GPIO_ID_JMPR_1 12 // GPIO used for ID Jumper 1
+#define GPIO_ID_JMPR_2 48 // GPIO used for ID Jumper 2
+#define GPIO_ID_JMPR_3 47 // GPIO used for ID Jumper 3
+#define GPIO_IMU_XL_INT 6 // GPIO used for IMU interrupt for XL data
 
 // Device Constants
-static const int STARTUP_DELAY = 10;                            // Delay time at boot to line up with FMC650
+static const int STARTUP_DELAY = 3;                            // Delay time at boot to line up with FMC650
 
 // Queues and Semaphores
+static QueueHandle_t queueIntXL;
 static QueueHandle_t CAN_rx_queue;
 static QueueHandle_t CAN_tx_queue;
 static QueueHandle_t CAN_control_queue;
@@ -91,26 +98,6 @@ typedef enum {
     CAN_TX_END
 } CAN_control_actions;
 
-/* 
- * I2C / Accelerometer constants
- */
-// Accelerometer data conversion - unused comment out
-static const float ACCEL_SCALE_4 = 0.000122;    // +/-4 LSB value
-static const float ACCEL_SCALE_8 = 0.000244;    // +/-8 LSB value
-// static const float GYRO_SCALE_250 = 0.00875;    // +/- 2500 dps value
-static const float GYRO_SCALE_1000 = 0.035;     // +/- 1000 dps value
-static const float GYRO_SCALE_2000 = 0.070;     // +/- 2000 dps value
-
-// Self test ranges - unused comment out
-static const float A_ST_MIN = 0.050;
-static const float A_ST_MAX = 1.700;
-static const float G_ST_MIN_2000 = 150;
-static const float G_ST_MAX_2000 = 700;
-
-// Data ready
-static const uint8_t XLDA = 0x01;
-static const uint8_t GDA = 0x02;
-
 /*
  * CAN BUS constants
  */
@@ -124,15 +111,6 @@ uint32_t CAN_ID_ACCEL_DATA = 0xFFFFFFFF;    // Variable to be setup as part of b
 uint32_t CAN_ID_GYRO_DATA = 0xFFFFFFFF;     // Variable to be setup as part of board ID
 
 #define CAN_ID_TEST                     0xFF0333FF
-
-typedef struct {
-    uint8_t reg;
-    size_t length;
-    uint8_t m[6];
-    int16_t mx, my, mz;
-    float mX, mY, mZ;
-    esp_err_t err;
-} IMUMeasureData;
 
 /* 
  * CAN BUS data
@@ -172,47 +150,80 @@ static twai_message_t CAN_TEST = {
 /*  
 *   Function prototypes
 */ 
-
-// Configures jumper GPIOs and sets the board ID.
-int IDInit();
+// Configure the board GPIO pins
+int configureGPIO(void);
+// Configures the board ID.
+int IDInit(void);
+// Installs and starts the TWAI driver 
+int twaiDriverStart(void);
+// Stops and uninstalls the TWAI driver 
+int twaiDriverEnd(void);
 // Sets the CAN IDs for messages based on board ID.
 int setCANID(uint32_t id);
 int setCANMessageID(twai_message_t *message, uint32_t id, uint8_t length);
-esp_err_t accel_read_data(IMUMeasureData *data);
-esp_err_t gyro_read_data(IMUMeasureData *data);
-int imuFormatData(IMUMeasureData *data, float scale);
 
-void taskIMU(void *pvParameters)
+static void IRAM_ATTR intHandler(void *arg)
 {
+    uint32_t gpioNum = (uint32_t) arg;
+    xQueueSendFromISR(queueIntXL, &gpioNum, NULL);
+}
+
+void taskI2C(void *pvParameters)
+{
+    // Log the accelerometer task has started.
+    ESP_LOGI(SOFA_DL_I2C, "I2C task created.");
+
+    // Start i2c
+    i2cBusStart();
+
     // Create the accel and gyro data structs
-    IMUMeasureData acceldata = {
+    i2cReadIMUReg acceldata = {
         .reg = 0x28,    // accel x axis reg, y follows 0x2A, z follows 0x2C
         .length = 6,    // read all accel data in 1 go
         .err = ESP_FAIL
     };
 
-    IMUMeasureData gyrodata = {
+    i2cReadIMUReg gyrodata = {
         .reg = 0x22,    // gyro x axis reg, y follows 0x24, z follows 0x26
         .length = 6,    // read all gyro data in 1 go
         .err = ESP_FAIL
     };
 
+    uint32_t gpioNum, count = 0;
+    while (1)
+    {
+        if (xQueueReceive(queueIntXL, &gpioNum, portMAX_DELAY))
+        {
+            // ESP_LOGI(SOFA_DL_I2C, "%lu - INTERRUPT RECEIVED on %lu.....", count, gpioNum);
+            ++count;
+        }
+    }
+
+    // End i2c
+    i2cBusEnd();
+
+    // Log if it ever gets here
+    ESP_LOGI(SOFA_DL_I2C, "I2C removed successfully.");
+
+    vTaskDelete(NULL);
+    
+}
+
+void taskIMU(void *pvParameters)
+{
+    // Variables for board status reg
     uint8_t boardStatus = 0;
     uint8_t ST_accel = 0;
     uint8_t ST_gyro = 0;
 
-    esp_err_t i2c_err;
+    // Old code to be removed, don't use err status.
+    esp_err_t i2c_err = ESP_OK;
 
     // Log the accelerometer task has started.
-    ESP_LOGI(I2C_ACCEL_TAG, "I2C task created.");
-
-    // Add the bus
-    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_master_config, &i2c_bus_handle));
-    // Add the device on the bus
-    ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_bus_handle, &i2c_accel_cfg, &i2c_accel_handle));
+    ESP_LOGI(SOFA_DL_IMU, "IMU task created.");
 
     // Read the WHO_AM_I (0x0F) register to see if we can see the accelerometer.
-    imuWhoami();
+    imuWhoAmI();
     vTaskDelay(pdMS_TO_TICKS(100));
 
     // Perform self tests
@@ -221,34 +232,26 @@ void taskIMU(void *pvParameters)
     ST_gyro = imuSelfTestG();
     vTaskDelay(pdMS_TO_TICKS(100));
 
+    // Set the board status based on the self test result.
     boardStatus = (((uint8_t)SOFA_DL_ID) << 4) | (ST_accel << 3) | (ST_gyro << 2);
 
     // Configure the accelerometer before reading data.
     imuConfig();
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    // DEBUG
-    // Read current ticks
-    // TickType_t ticks = xTaskGetTickCount();
-
     // Loop to read in accelerometer data
     while(1)
     {
         xSemaphoreTake(SEM_Accel_Data, portMAX_DELAY);
 
-        // DEBUG
-        // Update and log tick count
-        ESP_LOGI(I2C_ACCEL_TAG, "Time between IMU reads = %lu", pdTICKS_TO_MS(xTaskGetTickCount()));
+        IMUMeasureData dataXL, dataGyro;
 
         // Accelerometer data
-        i2c_err = accel_read_data(&acceldata);
+        imuReadAData(&acceldata, false);
        
         if (i2c_err == ESP_OK)
         {
-            imuFormatData(&acceldata, ACCEL_SCALE_8);
-
-            // DEBUG: Print out axis data in real number.
-            // ESP_LOGI(I2C_ACCEL_TAG, "ID: %d - ACCEL X/Y/Z axis reg %#04X %#04X %#06X | %#04X %#04X %#06X | %#04X %#04X %#06X = %.6f %.6f %.6f", SOFA_DL_ID, acceldata.m[0], acceldata.m[1], acceldata.mx, acceldata.m[2], acceldata.m[3], acceldata.my, acceldata.m[4], acceldata.m[5], acceldata.mz, acceldata.mX, acceldata.mY, acceldata.mZ);
+            imuFormatData(acceldata.m, &dataXL, ACCEL_SCALE_8);
 
             // Move into CAN message.
             CAN_Data_Accelerometer.data[0] = acceldata.m[0];
@@ -261,14 +264,14 @@ void taskIMU(void *pvParameters)
         }
 
         // Gyro data
-        i2c_err = gyro_read_data(&gyrodata);
+        imuReadGData(&gyrodata, true);
        
         if (i2c_err == ESP_OK)
         {
-            imuFormatData(&gyrodata, GYRO_SCALE_1000);
+            imuFormatData(gyrodata.m, &dataGyro, GYRO_SCALE_1000);
 
             // DEBUG: Print out axis data in real number.
-            // ESP_LOGI(I2C_ACCEL_TAG, "ID: %d - GYRO X/Y/Z axis reg %#04X %#04X %#06X | %#04X %#04X %#06X | %#04X %#04X %#06X = %.6f %.6f %.6f", SOFA_DL_ID, gyrodata.m[0], gyrodata.m[1], gyrodata.mx, gyrodata.m[2], gyrodata.m[3], gyrodata.my, gyrodata.m[4], gyrodata.m[5], gyrodata.mz, gyrodata.mX, gyrodata.mY, gyrodata.mZ);
+            // ESP_LOGI(SOFA_DL_IMU, "ID: %d - GYRO X/Y/Z axis reg %#04X %#04X %#06X | %#04X %#04X %#06X | %#04X %#04X %#06X = %.6f %.6f %.6f", SOFA_DL_ID, gyrodata.m[0], gyrodata.m[1], gyrodata.mx, gyrodata.m[2], gyrodata.m[3], gyrodata.my, gyrodata.m[4], gyrodata.m[5], gyrodata.mz, gyrodata.mX, gyrodata.mY, gyrodata.mZ);
 
             // Move into CAN message.
             CAN_Data_Gyro.data[0] = gyrodata.m[0];
@@ -282,15 +285,10 @@ void taskIMU(void *pvParameters)
         }
 
         xSemaphoreGive(SEM_Accel_Data);
-        // vTaskDelay(pdMS_TO_TICKS(500));
 
     }
 
-    // Remove the device
-    ESP_ERROR_CHECK(i2c_master_bus_rm_device(i2c_accel_handle));
-    // Uninstall the bus
-    ESP_ERROR_CHECK(i2c_del_master_bus(i2c_bus_handle));
-    ESP_LOGI(I2C_ACCEL_TAG, "I2C removed successfully.");
+    vTaskDelay(pdMS_TO_TICKS(1000));
 
     vTaskDelete(NULL);
 }
@@ -317,7 +315,7 @@ void taskCANRx(void *pvParameters)
             // When this task is needed, this will need to be updated.
             xSemaphoreGive(SEM_CAN_Control);
 
-            twai_message_t received_msg;
+            // twai_message_t received_msg;
 
             while (1)
             {
@@ -446,40 +444,48 @@ void app_main(void)
     // Delay the start of the device to line up with the FMC650
     for (int i = STARTUP_DELAY; i > 0; i--)
     {
-        ESP_LOGI(CON_ACCEL_TAG, "Device starting in %d", i);
+        ESP_LOGI(SOFA_DL_SYS, "Device starting in %d", i);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    // Configure the GPIOs for ID
+    // Configure the GPIOs
+    configureGPIO();
+
     // Read and set this board's ID
     IDInit();
     setCANID((uint32_t)SOFA_DL_ID);
+    
     // Only call after setCANID()
     setCANMessageID(&CAN_Data_Accelerometer, CAN_ID_Accel, 7);
     setCANMessageID(&CAN_Data_Gyro, CAN_ID_Gyro, 7);
     
-    //Install TWAI driver, trigger tasks to start
-    ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
-    ESP_LOGI(CAN_ACCEL_TAG, "CAN driver installed");
-    
     // Start the TWAI driver
-    ESP_ERROR_CHECK(twai_start());
-    ESP_LOGI(CAN_ACCEL_TAG, "CAN driver started.");
+    twaiDriverStart();
 
-    // Semaphores and queues
+    // Create queues
+    queueIntXL = xQueueCreate(104, sizeof(uint32_t));
     CAN_rx_queue = xQueueCreate(1, sizeof(CAN_control_actions));
     CAN_tx_queue = xQueueCreate(1, sizeof(CAN_control_actions));
     CAN_control_queue = xQueueCreate(1, sizeof(CAN_control_actions));
 
+    // Create semaphores
     SEM_Accel_Data = xSemaphoreCreateBinary();
     SEM_CAN_Control = xSemaphoreCreateBinary();
     SEM_Done = xSemaphoreCreateBinary();
     
     // Tasks
-    xTaskCreatePinnedToCore(taskIMU, "IMU_Task", 4096, NULL, TASK_PRIORITY_ACCELI2C, NULL, 1); // on its own core
-    xTaskCreatePinnedToCore(taskCANRx, "CANBus_Rx", 4096, NULL, TASK_PRIORITY_CAN_RX, NULL, tskNO_AFFINITY);
-    xTaskCreatePinnedToCore(taskCANTx, "CANBus_Tx", 4096, NULL, TASK_PRIORITY_CAN_TX, NULL, tskNO_AFFINITY);
-    xTaskCreatePinnedToCore(taskCANCtrl, "CANBus_Ctrl", 4096, NULL, TASK_PRIORITY_CAN_CTRL, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(taskI2C, "Task_I2C", 4096, NULL, TASK_PRIORITY_I2C, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(taskIMU, "Task_IMU", 4096, NULL, TASK_PRIORITY_IMU, NULL, 1); // on its own core
+    // xTaskCreatePinnedToCore(taskCANRx, "CANBus_Rx", 4096, NULL, TASK_PRIORITY_CAN_RX, NULL, tskNO_AFFINITY);
+    // xTaskCreatePinnedToCore(taskCANTx, "CANBus_Tx", 4096, NULL, TASK_PRIORITY_CAN_TX, NULL, tskNO_AFFINITY);
+    // xTaskCreatePinnedToCore(taskCANCtrl, "CANBus_Ctrl", 4096, NULL, TASK_PRIORITY_CAN_CTRL, NULL, tskNO_AFFINITY);
+
+    //install gpio isr service
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+    //hook isr handler for specific gpio pin
+    gpio_isr_handler_add(GPIO_IMU_XL_INT, intHandler, (void*) GPIO_IMU_XL_INT);
+
+    ESP_LOGI(SOFA_DL_SYS, "Minimum free heap size: %"PRIu32" bytes\n", esp_get_minimum_free_heap_size());
 
     xSemaphoreGive(SEM_Accel_Data);
     xSemaphoreGive(SEM_CAN_Control);
@@ -489,13 +495,11 @@ void app_main(void)
 
     xSemaphoreTake(SEM_Done, portMAX_DELAY);
 
-    // End TWAI driver, stop
-    ESP_ERROR_CHECK(twai_stop());
-    ESP_LOGI(CAN_ACCEL_TAG, "CAN driver stopped.");
+    // Remove the ISR
+    gpio_isr_handler_remove(GPIO_IMU_XL_INT);
 
-    //Uninstall TWAI driver
-    ESP_ERROR_CHECK(twai_driver_uninstall());
-    ESP_LOGI(CAN_ACCEL_TAG, "CAN driver uninstalled.");
+    // End the TWAI driver
+    twaiDriverEnd();
 
     // Delete semaphores
     vSemaphoreDelete(SEM_Accel_Data);
@@ -504,29 +508,49 @@ void app_main(void)
     
     // Don't start the scheduler - it starts automatically.
     // vTaskStartScheduler();
-    
 }
 
-int IDInit()
-{    
-    // Create and set the GPIO config structure for the ID jumper inputs
-    gpio_config_t input_config = {};
-    input_config.intr_type = GPIO_INTR_DISABLE;
-    input_config.mode = GPIO_MODE_INPUT;
-    input_config.pin_bit_mask = (1ULL << ID_JUMPER_1_GPIO) | (1ULL << ID_JUMPER_2_GPIO) | (1ULL << ID_JUMPER_3_GPIO);
-    input_config.pull_down_en = 0;
-    input_config.pull_up_en = 1;
-    gpio_config(&input_config);
+int configureGPIO(void)
+{
+    // Set the GPIO config ID jumper inputs
+    gpio_config_t gpioInputConfig = {};
+    gpioInputConfig.intr_type = GPIO_INTR_DISABLE;
+    gpioInputConfig.mode = GPIO_MODE_INPUT;
+    gpioInputConfig.pin_bit_mask = (1ULL << GPIO_ID_JMPR_1) | (1ULL << GPIO_ID_JMPR_2) | (1ULL << GPIO_ID_JMPR_3);
+    gpioInputConfig.pull_down_en = 0;
+    gpioInputConfig.pull_up_en = 1;
+    gpio_config(&gpioInputConfig);
 
+    // gpio_set_intr_type(GPIO_NUM_6, GPIO_INTR_POSEDGE);
+
+    // Set the GPIO config for IMU interrupt pin
+    gpio_config_t gpioIntConfig = {};
+    gpioIntConfig.intr_type = GPIO_INTR_POSEDGE;
+    gpioIntConfig.mode = GPIO_MODE_INPUT;
+    gpioIntConfig.pin_bit_mask = (1ULL << GPIO_IMU_XL_INT);
+    gpioIntConfig.pull_down_en = 0;
+    gpioIntConfig.pull_up_en = 1;
+    gpio_config(&gpioIntConfig);
+
+    // DEBUG - Dump GPIO Config
+    // gpio_dump_io_configuration(stdout, (1ULL << GPIO_IMU_XL_INT));
+    // gpio_dump_io_configuration(stdout, SOC_GPIO_VALID_GPIO_MASK);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    return 0;
+}
+
+int IDInit(void)
+{    
     // Delay before read
     vTaskDelay(pdMS_TO_TICKS(1000));
 
     int jumper = 0;
     // Read the jumper pins and add to find the ID.
     // As it's pull up inverted with ! so it aligns with jumper sets that bit.
-    int jumper1 = !gpio_get_level(ID_JUMPER_1_GPIO);
-    int jumper2 = !gpio_get_level(ID_JUMPER_2_GPIO);
-    int jumper3 = !gpio_get_level(ID_JUMPER_3_GPIO);
+    int jumper1 = !gpio_get_level(GPIO_ID_JMPR_1);
+    int jumper2 = !gpio_get_level(GPIO_ID_JMPR_2);
+    int jumper3 = !gpio_get_level(GPIO_ID_JMPR_3);
     // Weighted binary from jumpers.
     jumper = (4 * jumper1) + (2 * jumper2) + (1 * jumper3);
 
@@ -580,9 +604,35 @@ int IDInit()
     }
 
     // DEBUG
-    ESP_LOGI(CON_ACCEL_TAG, "ID: %d - ID jumper set %d%d%d %d.", SOFA_DL_ID, jumper1, jumper2, jumper3, jumper);
+    ESP_LOGI(SOFA_DL_SYS, "ID: %d - ID jumper set %d%d%d %d.", SOFA_DL_ID, jumper1, jumper2, jumper3, jumper);
 
     // TODO: return status
+    return 0;
+}
+
+int twaiDriverStart(void)
+{
+    //Install TWAI driver, trigger tasks to start
+    ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
+    ESP_LOGI(CAN_ACCEL_TAG, "CAN driver installed");
+    
+    // Start the TWAI driver
+    ESP_ERROR_CHECK(twai_start());
+    ESP_LOGI(CAN_ACCEL_TAG, "CAN driver started.");
+
+    return 0;
+}
+
+int twaiDriverEnd(void)
+{
+    // End TWAI driver, stop
+    ESP_ERROR_CHECK(twai_stop());
+    ESP_LOGI(CAN_ACCEL_TAG, "CAN driver stopped.");
+
+    //Uninstall TWAI driver
+    ESP_ERROR_CHECK(twai_driver_uninstall());
+    ESP_LOGI(CAN_ACCEL_TAG, "CAN driver uninstalled.");
+
     return 0;
 }
 
@@ -620,73 +670,6 @@ int setCANMessageID(twai_message_t *message, uint32_t id, uint8_t length)
     message->data_length_code = length;
 
     ESP_LOGI(CAN_ACCEL_TAG, "CAN message created - ID: %#08lX, DLC: %d, EXTD: %d, RTR: %d, SS: %d, SELF: %d, DLC_NON_COMP: %d.", message->identifier, message->data_length_code, message->extd, message->rtr, message->ss, message->self, message->dlc_non_comp);
-
-    return 0;
-}
-
-esp_err_t accel_read_data(IMUMeasureData *data)
-{
-    esp_err_t accel_i2c_err;
-
-    i2cRead1Reg tx_accel_data_ready = {
-        .tx = 0x1E,     // STATUS_REG register
-        .rx = 0x00,     // No expectation
-        .success = 0x00,
-        .err = ESP_FAIL
-    };  
-
-    // Check accel data is available.
-    uint8_t accel_data_avail = 0x00;
-
-    while (accel_data_avail != XLDA)
-    {
-        tx_accel_data_ready.err = i2c_master_transmit_receive(i2c_accel_handle, &tx_accel_data_ready.tx, sizeof(tx_accel_data_ready.tx), &tx_accel_data_ready.rx, 1, -1);
-        accel_data_avail = tx_accel_data_ready.rx & XLDA;
-    }
-    
-    // New accel data is available, read it.
-    // ESP_LOGI(I2C_ACCEL_TAG, "Accelerometer data ready.");
-    accel_i2c_err = i2c_master_transmit_receive(i2c_accel_handle, &data->reg, sizeof(data->reg), data->m, data->length, -1);
-
-    return accel_i2c_err;
-}
-
-esp_err_t gyro_read_data(IMUMeasureData *data)
-{
-    esp_err_t gyro_i2c_err;
-
-    i2cRead1Reg tx_gyro_data_ready = {
-        .tx = 0x1E,     // STATUS_REG register
-        .rx = 0x00,     // No expectation
-        .success = 0x00,
-        .err = ESP_FAIL
-    };  
-
-    // Check accel data is available.
-    uint8_t gyro_data_avail = 0x00;
-
-    while (gyro_data_avail != GDA)
-    {
-        tx_gyro_data_ready.err = i2c_master_transmit_receive(i2c_accel_handle, &tx_gyro_data_ready.tx, sizeof(tx_gyro_data_ready.tx), &tx_gyro_data_ready.rx, 1, -1);
-        gyro_data_avail = tx_gyro_data_ready.rx & GDA;
-    }
-    
-    // New accel data is available, read it.
-    gyro_i2c_err = i2c_master_transmit_receive(i2c_accel_handle, &data->reg, sizeof(data->reg), data->m, data->length, -1);
-
-    return gyro_i2c_err;
-}
-
-int imuFormatData(IMUMeasureData *data, float scale)
-{
-    data->mx = ((int16_t)data->m[1] << 8) + data->m[0];
-    data->mX = ((float)data->mx) * scale;
-
-    data->my = ((int16_t)data->m[3] << 8) + data->m[2];
-    data->mY = ((float)data->my) * scale;
-
-    data->mz = ((int16_t)data->m[5] << 8) + data->m[4];
-    data->mZ = ((float)data->mz) * scale;
 
     return 0;
 }
