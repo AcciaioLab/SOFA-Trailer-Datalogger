@@ -145,8 +145,8 @@ int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data)
     // This follows the Fusion library simple example
     // https://github.com/xioTechnologies/Fusion/blob/main/Examples/Simple/main.c
 
-    const FusionVector gyro = {};
-    const FusionVector accel = {};
+    FusionVector gyro = {};
+    FusionVector accel = {};
 
     FusionAhrsUpdateNoMagnetometer(ahrs, gyro, accel, IMU_SAMPLE_PERIOD);
 
