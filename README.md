@@ -14,3 +14,9 @@ Accelerometer - STM LSM6DSOX
 ## Software
 
 ESP-IDF v5.4.1 in VSCode, built from template-app sample project for project structure.
+
+### TODO
+- [] Madgwick filter
+- [] Consolidate self test code into single modular function.
+- [] 
+- [] 

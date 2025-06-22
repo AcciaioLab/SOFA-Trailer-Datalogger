@@ -58,6 +58,11 @@ typedef struct {
     esp_err_t err;
 } i2cReadIMUReg;
 
+typedef struct {
+    i2cReadIMUReg xl;
+    i2cReadIMUReg gyro;
+} IMUReadDataFrame;
+
 // Function Prototypes
 int i2cBusStart(void);
 int i2cBusEnd(void);

@@ -37,9 +37,15 @@ typedef struct {
     esp_err_t err;
 } IMUMeasureData;
 
+typedef struct {
+    IMUMeasureData xl;
+    IMUMeasureData gyro;
+} IMUData;
+
 // Function Prototypes
 void imuWhoAmI(void);
 void imuConfig(void);
+void imuDisableInt(void);
 int imuReadAData(i2cReadIMUReg *data, bool check);
 int imuReadGData(i2cReadIMUReg *data, bool check);
 int imuFormatData(uint8_t m[6], IMUMeasureData *data, float scale);

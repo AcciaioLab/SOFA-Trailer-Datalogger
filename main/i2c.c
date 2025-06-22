@@ -30,6 +30,8 @@ int i2cBusStart(void)
     // Add the device on the bus
     ESP_ERROR_CHECK(i2c_master_bus_add_device(i2cBusHandle, &i2c_accel_cfg, &i2cIMUHandle));
 
+    ESP_LOGI(I2C_DRIVER_TAG, "I2C bus started and device added.");
+
     return 0;
 }
 
@@ -39,6 +41,8 @@ int i2cBusEnd(void)
     ESP_ERROR_CHECK(i2c_master_bus_rm_device(i2cIMUHandle));
     // Uninstall the bus
     ESP_ERROR_CHECK(i2c_del_master_bus(i2cBusHandle));
+
+    ESP_LOGI(I2C_DRIVER_TAG, "I2C bus ended.");
 
     return 0;
 }
