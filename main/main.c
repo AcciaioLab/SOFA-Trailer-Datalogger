@@ -66,7 +66,6 @@ uint32_t CAN_ID_Gyro = 0xFFFFFFFF;
 #define TASK_PRIORITY_CAN_CTRL 12
 
 #define ESP_INTR_FLAG_DEFAULT 0
-#define QUEUE_LENGTH 104
 
 // Pins
 #define CAN_RX_GPIO 14 // GPIO used for CAN Rx
@@ -192,16 +191,16 @@ void taskI2C(void *pvParameters)
     };
 
     // DEBUG - timing
-    uint64_t tStart = esp_timer_get_time();
+    // uint64_t tStart = esp_timer_get_time();
 
     while (1)
     {
         if (xQueueReceive(queueIntXL, &gpioNum, portMAX_DELAY))
         {
             // DEBUG - timing
-            uint64_t tEnd = esp_timer_get_time();
-            ESP_LOGI(SOFA_DL_IMU, "Time between interrupt call %.3f ms", ((float)(tEnd-tStart)/1000));
-            tStart = tEnd;
+            // uint64_t tEnd = esp_timer_get_time();
+            // ESP_LOGI(SOFA_DL_IMU, "Time between interrupt call %.3f ms", ((float)(tEnd-tStart)/1000));
+            // tStart = tEnd;
             
             // ESP_LOGI(SOFA_DL_I2C, "INTERRUPT RECEIVED on PIN %lu.....", gpioNum);
 
@@ -228,9 +227,6 @@ void taskIMU(void *pvParameters)
     uint8_t boardStatus = 0;
     uint8_t stResultXL = 0;
     uint8_t stResultGyro = 0;
-
-    // Old code to be removed, don't use err status.
-    esp_err_t i2c_err = ESP_OK;
 
     // Log the accelerometer task has started.
     ESP_LOGI(SOFA_DL_IMU, "IMU task created.");
@@ -260,9 +256,11 @@ void taskIMU(void *pvParameters)
 
     IMUReadDataFrame bufRead;
     uint16_t bufCount = 0;
-    IMUData bufIMURawData[QUEUE_LENGTH];
+    IMUData bufIMURawData[IMU_SAMPLE_PER_SEC];
 
     // Loop to read in accelerometer data
+    // DEBUG - timing
+    uint64_t tOverallStart = esp_timer_get_time();
     while(1)
     {
         // ESP_LOGI(SOFA_DL_IMU, "IN IMU TASK...");
@@ -271,34 +269,46 @@ void taskIMU(void *pvParameters)
         if (xQueueReceive(queueIMUReadData, &bufRead, portMAX_DELAY))
         {
             // DEBUG - timing
-            uint64_t tStart = esp_timer_get_time();
+            // uint64_t tStart = esp_timer_get_time();
 
             // ESP_LOGI(SOFA_DL_IMU, "Item %d: XL measurement data received from queue.", bufCount);
             imuFormatData(bufRead.xl.m, &bufIMURawData[bufCount].xl, ACCEL_SCALE_8);
             imuFormatData(bufRead.gyro.m, &bufIMURawData[bufCount].gyro, GYRO_SCALE_1000);
             bufCount++;
-            if (bufCount > QUEUE_LENGTH - 1)
+            if (bufCount > (IMU_SAMPLE_PER_SEC - 1))
             {
                 bufCount = 0;
             }
 
             // DEBUG - timing
-            uint64_t tEnd = esp_timer_get_time();
-            ESP_LOGI(SOFA_DL_IMU, "Format raw data XL/Gyro took %.3f ms", ((float)(tEnd-tStart)/1000));
+            // uint64_t tEnd = esp_timer_get_time();
+            // ESP_LOGI(SOFA_DL_IMU, "Format raw data XL/Gyro took %.3f ms", ((float)(tEnd-tStart)/1000));
         }
 
-        // 2 - Raw data through Madgwick filter
+        // When at the end of the samples / sec, calc and send
+        if (bufCount == (IMU_SAMPLE_PER_SEC - 1))
+        {
+            ESP_LOGI(SOFA_DL_IMU, "IMU data sample buffer full, calc and send.");
 
-        // 3 - Remove gravity from acceleration data.
+            // 2 - Raw data through Madgwick filter
 
-        // 4 - More filtering (OPTIONAL at the moment)
-        // Nothing now
+            // 3 - Remove gravity from acceleration data.
 
-        // 5 - Mean of the values
+            // 4 - More filtering (OPTIONAL at the moment)
+            // Nothing now
 
-        // 6 - Send to FMC, package CAN data
+            // 5 - Mean of the values
+            IMUSendData imuSend; 
+            imuMeanData(bufIMURawData, &imuSend);
 
-        
+            // 6 - Send to FMC, package CAN data
+
+            // DEBUG - timing
+            uint64_t tOverallEnd = esp_timer_get_time();
+            ESP_LOGI(SOFA_DL_IMU, "IMU data cycle took %.3f ms", ((float)(tOverallEnd-tOverallStart)/1000));
+            tOverallStart = tOverallEnd;
+        }
+
         /* This is to be updated later
         // Move into CAN message.
         CAN_Data_Accelerometer.data[0] = acceldata.m[0];

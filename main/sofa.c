@@ -81,6 +81,32 @@ int imuFormatData(uint8_t m[6], IMUMeasureData *data, float scale)
     return 0;
 }
 
+int imuMeanData(IMUData rawData[], IMUSendData *data)
+{
+    int i = 0;
+    for (i = 0; i < IMU_SAMPLE_PER_SEC; i++)
+    {
+        data->x = data->x + rawData[i].xl.mX;
+        data->y = data->y + rawData[i].xl.mY;
+        data->z = data->z + rawData[i].xl.mZ;
+        data->roll = data->roll + rawData[i].gyro.mX;
+        data->pitch = data->pitch + rawData[i].gyro.mY;
+        data->yaw = data->yaw + rawData[i].gyro.mZ;
+    }
+
+    data->x = data->x / IMU_SAMPLE_PER_SEC;
+    data->y = data->y / IMU_SAMPLE_PER_SEC;
+    data->z = data->z / IMU_SAMPLE_PER_SEC;
+    data->roll = data->roll / IMU_SAMPLE_PER_SEC;
+    data->pitch = data->pitch / IMU_SAMPLE_PER_SEC;
+    data->yaw = data->yaw / IMU_SAMPLE_PER_SEC;
+
+    // DEBUG
+    ESP_LOGI(SOFA_FUNC_TAG, "XL X/Y/Z: %.3f %.3f %.3f GYRO X/Y/Z: %.3f %.3f %.3f", data->x, data->y, data->z, data->roll, data->pitch, data->yaw);
+
+    return 0;
+}
+
 void imuWhoAmI(void)
 {
     // Create the data for this read.

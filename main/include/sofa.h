@@ -13,6 +13,8 @@
 
 static char *SOFA_FUNC_TAG = "SOFA_DL_FUNC";
 
+#define IMU_SAMPLE_PER_SEC 104
+
 // Data ready
 static const uint8_t WHOAMI = 0x6C;
 static const uint8_t XLDA = 0x01;
@@ -42,6 +44,12 @@ typedef struct {
     IMUMeasureData gyro;
 } IMUData;
 
+typedef struct {
+    float x, y, z;
+    float roll, pitch, yaw;
+    float RMS;
+} IMUSendData;
+
 // Function Prototypes
 void imuWhoAmI(void);
 void imuConfig(void);
@@ -49,6 +57,7 @@ void imuDisableInt(void);
 int imuReadAData(i2cReadIMUReg *data, bool check);
 int imuReadGData(i2cReadIMUReg *data, bool check);
 int imuFormatData(uint8_t m[6], IMUMeasureData *data, float scale);
+int imuMeanData(IMUData rawData[], IMUSendData *data);
 uint8_t imuSelfTestA(void);
 uint8_t imuSelfTestG(void);
 
