@@ -34,19 +34,7 @@
 * Definitions
 */ 
 
-// Board ID
-enum boardID
-{
-    BID_SPECIAL = 0,
-    BID_AXLE_1_R = 1,
-    BID_SPARE_1 = 2,
-    BID_AXLE_2_R = 3,
-    BID_AXLE_1_L = 4,
-    BID_SPARE_2 = 5,
-    BID_AXLE_2_L = 6,
-    BID_KING_PIN = 7
-};
-static enum boardID SOFA_DL_ID; // Given const CAPS because it is set once.
+enum boardID SOFA_DL_ID;
 
 // Logging Tags
 static char *SOFA_DL_SYS = "SOFA_DL_SYS";
@@ -225,8 +213,6 @@ void taskIMU(void *pvParameters)
 {
     // Variables for board status reg
     uint8_t boardStatus = 0;
-    uint8_t stResultXL = 0;
-    uint8_t stResultGyro = 0;
 
     // Log the accelerometer task has started.
     ESP_LOGI(SOFA_DL_IMU, "IMU task created.");
@@ -234,25 +220,8 @@ void taskIMU(void *pvParameters)
     // Start i2c
     i2cBusStart();
 
-    // Read the WHO_AM_I (0x0F) register to see if we can see the accelerometer.
-    imuWhoAmI();
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    // Disable the IMU interrupt at the start.
-    // imuDisableInt();
-
-    // Perform self tests
-    stResultXL = imuSelfTestA();
-    vTaskDelay(pdMS_TO_TICKS(100));
-    stResultGyro = imuSelfTestG();
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    // Set the board status based on the self test result.
-    boardStatus = (((uint8_t)SOFA_DL_ID) << 4) | (stResultXL << 3) | (stResultGyro << 2);
-
-    // Configure the accelerometer before reading data.
-    imuConfig();
-    vTaskDelay(pdMS_TO_TICKS(100));
+    // Initialise IMU
+    imuInit(&boardStatus);
 
     IMUReadDataFrame bufRead;
     uint16_t bufCount = 0;

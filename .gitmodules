@@ -1,0 +1,3 @@
+[submodule "main/lib/Fusion"]
+	path = main/lib/Fusion
+	url = git@github.com-acciaiolab:xioTechnologies/Fusion.git

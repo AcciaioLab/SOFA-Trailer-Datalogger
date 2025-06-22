@@ -1,5 +1,38 @@
 #include "../include/sofa.h"
 
+/**
+ * @brief Sequence to initialise the IMU for SOFA.
+ * @param void
+ * @return void
+ */
+void imuInit(uint8_t *status)
+{
+    // Self test results
+    uint8_t stResultXL = 0;
+    uint8_t stResultGyro = 0;
+
+    // Read the WHO_AM_I (0x0F) register to see if we can see the accelerometer.
+    imuWhoAmI();
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Disable the IMU interrupt at the start.
+    imuDisableInt();
+
+    // Perform self tests
+    stResultXL = imuSelfTestA();
+    vTaskDelay(pdMS_TO_TICKS(100));
+    stResultGyro = imuSelfTestG();
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Set the board status based on the self test result.
+    *status = (((uint8_t)SOFA_DL_ID) << 4) | (stResultXL << 3) | (stResultGyro << 2);
+
+    // Configure the accelerometer before reading data.
+    imuConfig();
+    vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+
 int imuReadAData(i2cReadIMUReg *data, bool check)
 {
     int err = 0;
