@@ -32,7 +32,12 @@ void imuInit(uint8_t *status)
     vTaskDelay(pdMS_TO_TICKS(100));
 }
 
-
+/**
+ * @brief Reads accelerometer data from the IMU. It is pre-configured with the I2C registers.
+ * @param data pointer to the i2cReadIMUReg to return the received data.
+ * @param check True to wait for the data ready status to check before reading data registers.
+ * @return status (int, not used TODO)
+ */
 int imuReadAData(i2cReadIMUReg *data, bool check)
 {
     int err = 0;
@@ -65,6 +70,13 @@ int imuReadAData(i2cReadIMUReg *data, bool check)
     return err;
 }
 
+/**
+ * @brief Reads gyro data from the IMU. It is pre-configured with the I2C registers.
+ * @param data pointer to the i2cReadIMUReg to return the received data.
+ * @param check True to wait for the data ready status to check before reading data registers.
+ * NOTE: This should always be true for gyro.
+ * @return status (int, not used TODO)
+ */
 int imuReadGData(i2cReadIMUReg *data, bool check)
 {
     int err = 0;
@@ -121,8 +133,25 @@ int imuScaleData(uint8_t m[], IMUMeasureData *data, float scale)
     return 0;
 }
 
-int imuMadgwick(void)
+/**
+ * @brief Applies the Fusion AHRS filter to the raw data as it is received.
+ * @param ahrs pointer to Fusion ahrs algorithm structure.
+ * @param data pointer to IMUData with the last received IMU data.
+ * @return int status (TODO)
+ */
+int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data)
 {
+    ESP_LOGI(SOFA_FUNC_TAG, "Fusion AHRS filtering raw IMU data.");
+    // This follows the Fusion library simple example
+    // https://github.com/xioTechnologies/Fusion/blob/main/Examples/Simple/main.c
+
+    const FusionVector gyro = {};
+    const FusionVector accel = {};
+
+    FusionAhrsUpdateNoMagnetometer(ahrs, gyro, accel, IMU_SAMPLE_PERIOD);
+
+    const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(ahrs));
+    ESP_LOGI(SOFA_FUNC_TAG, "Roll %0.1f, Pitch %0.1f, Yaw %0.1f", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
 
     return 0;
 }
@@ -136,7 +165,7 @@ int imuMadgwick(void)
 int imuMeanData(IMUData rawData[], IMUSendData *data)
 {
     int i = 0;
-    for (i = 0; i < IMU_SAMPLE_PER_SEC; i++)
+    for (i = 0; i < IMU_SAMPLE_RATE; i++)
     {
         data->x = data->x + rawData[i].xl.mX;
         data->y = data->y + rawData[i].xl.mY;
@@ -146,12 +175,12 @@ int imuMeanData(IMUData rawData[], IMUSendData *data)
         data->yaw = data->yaw + rawData[i].gyro.mZ;
     }
 
-    data->x = data->x / IMU_SAMPLE_PER_SEC;
-    data->y = data->y / IMU_SAMPLE_PER_SEC;
-    data->z = data->z / IMU_SAMPLE_PER_SEC;
-    data->roll = data->roll / IMU_SAMPLE_PER_SEC;
-    data->pitch = data->pitch / IMU_SAMPLE_PER_SEC;
-    data->yaw = data->yaw / IMU_SAMPLE_PER_SEC;
+    data->x = data->x / IMU_SAMPLE_RATE;
+    data->y = data->y / IMU_SAMPLE_RATE;
+    data->z = data->z / IMU_SAMPLE_RATE;
+    data->roll = data->roll / IMU_SAMPLE_RATE;
+    data->pitch = data->pitch / IMU_SAMPLE_RATE;
+    data->yaw = data->yaw / IMU_SAMPLE_RATE;
 
     // DEBUG
     ESP_LOGI(SOFA_FUNC_TAG, "AVERAGE: XL X/Y/Z: %.3f %.3f %.3f GYRO X/Y/Z: %.3f %.3f %.3f", data->x, data->y, data->z, data->roll, data->pitch, data->yaw);

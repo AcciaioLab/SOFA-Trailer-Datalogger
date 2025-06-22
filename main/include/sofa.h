@@ -12,9 +12,12 @@
 
 #include "i2c.h"
 
+#include "../../components/Fusion/Fusion/Fusion.h"
+
 static char *SOFA_FUNC_TAG = "SOFA_DL_FUNC";
 
-#define IMU_SAMPLE_PER_SEC 104
+#define IMU_SAMPLE_RATE 104
+#define IMU_SAMPLE_PERIOD (1/IMU_SAMPLE_RATE)
 
 // Data ready
 static const uint8_t WHOAMI = 0x6C;
@@ -73,7 +76,7 @@ void imuDisableInt(void);
 int imuReadAData(i2cReadIMUReg *data, bool check);
 int imuReadGData(i2cReadIMUReg *data, bool check);
 int imuScaleData(uint8_t m[], IMUMeasureData *data, float scale);
-int imuMadgwick(void);
+int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data);
 int imuMeanData(IMUData rawData[], IMUSendData *data);
 uint8_t imuSelfTestA(void);
 uint8_t imuSelfTestG(void);

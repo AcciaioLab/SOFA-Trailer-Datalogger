@@ -223,9 +223,14 @@ void taskIMU(void *pvParameters)
     // Initialise IMU
     imuInit(&boardStatus);
 
+    // Setup IMU data variables
     IMUReadDataFrame bufRead;
     uint16_t bufCount = 0;
-    IMUData bufIMURawData[IMU_SAMPLE_PER_SEC];
+    IMUData bufIMURawData[IMU_SAMPLE_RATE];
+
+    // Setup Fusion
+    FusionAhrs ahrs;
+    FusionAhrsInitialise(&ahrs);
 
     // Loop to read in accelerometer data
     // DEBUG - timing
@@ -241,10 +246,17 @@ void taskIMU(void *pvParameters)
             // uint64_t tStart = esp_timer_get_time();
 
             // ESP_LOGI(SOFA_DL_IMU, "Item %d: XL measurement data received from queue.", bufCount);
+
+            // 1 - Read in raw IMU data (XL/gyro)
             imuScaleData(bufRead.xl.m, &bufIMURawData[bufCount].xl, ACCEL_SCALE_8);
             imuScaleData(bufRead.gyro.m, &bufIMURawData[bufCount].gyro, GYRO_SCALE_1000);
+
+            // 2 - Raw data through Madgwick filter
+            imuFusionAHRS(&ahrs, &bufIMURawData[bufCount]);
+
+            // Increment the buffer
             bufCount++;
-            if (bufCount > (IMU_SAMPLE_PER_SEC - 1))
+            if (bufCount > (IMU_SAMPLE_RATE - 1))
             {
                 bufCount = 0;
             }
@@ -252,17 +264,19 @@ void taskIMU(void *pvParameters)
             // DEBUG
             ESP_LOGI(SOFA_DL_IMU, "XL X/Y/Z: %.3f %.3f %.3f GYRO X/Y/Z: %.3f %.3f %.3f", bufIMURawData[bufCount].xl.mX, bufIMURawData[bufCount].xl.mY, bufIMURawData[bufCount].xl.mZ, bufIMURawData[bufCount].gyro.mX, bufIMURawData[bufCount].gyro.mY, bufIMURawData[bufCount].gyro.mZ);
 
+            
+
             // DEBUG - timing
             // uint64_t tEnd = esp_timer_get_time();
             // ESP_LOGI(SOFA_DL_IMU, "Format raw data XL/Gyro took %.3f ms", ((float)(tEnd-tStart)/1000));
         }
 
         // When at the end of the samples / sec, calc and send
-        if (bufCount == (IMU_SAMPLE_PER_SEC - 1))
+        if (bufCount == (IMU_SAMPLE_RATE - 1))
         {
             ESP_LOGI(SOFA_DL_IMU, "IMU data sample buffer full, calc and send.");
 
-            // 2 - Raw data through Madgwick filter
+            
 
             // 3 - Remove gravity from acceleration data.
 

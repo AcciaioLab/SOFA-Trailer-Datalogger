@@ -1,5 +1,8 @@
 # ESP-IDF default build directory name
 build
+.devcontainer
+
+# Git
 
 # lock files for examples and components
 dependencies.lock
