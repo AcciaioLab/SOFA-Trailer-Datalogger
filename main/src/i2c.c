@@ -1,4 +1,4 @@
-#include "i2c.h"
+#include "../include/i2c.h"
 
 /* 
  * I2C / Accelerometer data

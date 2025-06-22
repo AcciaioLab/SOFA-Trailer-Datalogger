@@ -1,4 +1,4 @@
-#include "sofa.h"
+#include "../include/sofa.h"
 
 int imuReadAData(i2cReadIMUReg *data, bool check)
 {
@@ -64,7 +64,14 @@ int imuReadGData(i2cReadIMUReg *data, bool check)
     return err;
 }
 
-int imuFormatData(uint8_t m[6], IMUMeasureData *data, float scale)
+/**
+ * @brief Scales the 8bit raw IMU data into a float.
+ * @param m[] raw data array, 2 x 8bit unsigned int 
+ * @param data pointer to IMUMeasureData struct to save result
+ * @param scale scale value depending on accelerometer or gyro 
+ * @return int status (TODO)
+ */
+int imuScaleData(uint8_t m[], IMUMeasureData *data, float scale)
 {
     data->mx = ((int16_t)m[1] << 8) + m[0];
     data->mX = ((float)data->mx) * scale;
@@ -81,6 +88,18 @@ int imuFormatData(uint8_t m[6], IMUMeasureData *data, float scale)
     return 0;
 }
 
+int imuMadgwick(void)
+{
+
+    return 0;
+}
+
+/**
+ * @brief Calculates the mean of the IMU data and saves the result in the send data struct.
+ * @param rawData IMUData raw data array 
+ * @param data pointer to IMUSendData struct
+ * @return int status (TODO)
+ */
 int imuMeanData(IMUData rawData[], IMUSendData *data)
 {
     int i = 0;
@@ -102,7 +121,7 @@ int imuMeanData(IMUData rawData[], IMUSendData *data)
     data->yaw = data->yaw / IMU_SAMPLE_PER_SEC;
 
     // DEBUG
-    ESP_LOGI(SOFA_FUNC_TAG, "XL X/Y/Z: %.3f %.3f %.3f GYRO X/Y/Z: %.3f %.3f %.3f", data->x, data->y, data->z, data->roll, data->pitch, data->yaw);
+    ESP_LOGI(SOFA_FUNC_TAG, "AVERAGE: XL X/Y/Z: %.3f %.3f %.3f GYRO X/Y/Z: %.3f %.3f %.3f", data->x, data->y, data->z, data->roll, data->pitch, data->yaw);
 
     return 0;
 }
@@ -240,7 +259,7 @@ uint8_t imuSelfTestA(void)
     {
         // Read the data
         imuReadAData(&regSTXL, true);
-        imuFormatData(regSTXL.m, &dataSTXL, ACCEL_SCALE_4);
+        imuScaleData(regSTXL.m, &dataSTXL, ACCEL_SCALE_4);
         // Compute the average of each axis and store in _NOST.
         // Each read add to _NOST, divide by 5 at end.
         OUTX_NOST = OUTX_NOST + dataSTXL.mX;
@@ -276,7 +295,7 @@ uint8_t imuSelfTestA(void)
     {
         // Read the data
         imuReadAData(&regSTXL, true);
-        imuFormatData(regSTXL.m, &dataSTXL, ACCEL_SCALE_4);
+        imuScaleData(regSTXL.m, &dataSTXL, ACCEL_SCALE_4);
         // Compute the average of each axis and store in _ST.
         // Each read add to _ST, divide by 5 at end.
         OUTX_ST = OUTX_ST + dataSTXL.mX;
@@ -395,7 +414,7 @@ uint8_t imuSelfTestG(void)
     {
         // Read the data
         imuReadGData(&regSTG, true);
-        imuFormatData(regSTG.m, &dataSTG, GYRO_SCALE_2000);
+        imuScaleData(regSTG.m, &dataSTG, GYRO_SCALE_2000);
         // Compute the average of each axis and store in _NOST.
         // Each read add to _NOST, divide by 5 at end.
         OUTX_NOST = OUTX_NOST + dataSTG.mX;
@@ -431,7 +450,7 @@ uint8_t imuSelfTestG(void)
     {
         // Read the data
         imuReadGData(&regSTG, true);
-        imuFormatData(regSTG.m, &dataSTG, GYRO_SCALE_2000);
+        imuScaleData(regSTG.m, &dataSTG, GYRO_SCALE_2000);
         // Compute the average of each axis and store in _ST.
         // Each read add to _ST, divide by 5 at end.
         OUTX_ST = OUTX_ST + dataSTG.mX;

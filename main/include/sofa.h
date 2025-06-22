@@ -6,6 +6,7 @@
 #include <math.h>
 
 #include "sdkconfig.h"
+#include "freertos/FreeRTOS.h"
 #include "esp_err.h"
 #include "esp_log.h"
 
@@ -56,7 +57,8 @@ void imuConfig(void);
 void imuDisableInt(void);
 int imuReadAData(i2cReadIMUReg *data, bool check);
 int imuReadGData(i2cReadIMUReg *data, bool check);
-int imuFormatData(uint8_t m[6], IMUMeasureData *data, float scale);
+int imuScaleData(uint8_t m[], IMUMeasureData *data, float scale);
+int imuMadgwick(void);
 int imuMeanData(IMUData rawData[], IMUSendData *data);
 uint8_t imuSelfTestA(void);
 uint8_t imuSelfTestG(void);

@@ -272,13 +272,16 @@ void taskIMU(void *pvParameters)
             // uint64_t tStart = esp_timer_get_time();
 
             // ESP_LOGI(SOFA_DL_IMU, "Item %d: XL measurement data received from queue.", bufCount);
-            imuFormatData(bufRead.xl.m, &bufIMURawData[bufCount].xl, ACCEL_SCALE_8);
-            imuFormatData(bufRead.gyro.m, &bufIMURawData[bufCount].gyro, GYRO_SCALE_1000);
+            imuScaleData(bufRead.xl.m, &bufIMURawData[bufCount].xl, ACCEL_SCALE_8);
+            imuScaleData(bufRead.gyro.m, &bufIMURawData[bufCount].gyro, GYRO_SCALE_1000);
             bufCount++;
             if (bufCount > (IMU_SAMPLE_PER_SEC - 1))
             {
                 bufCount = 0;
             }
+
+            // DEBUG
+            ESP_LOGI(SOFA_DL_IMU, "XL X/Y/Z: %.3f %.3f %.3f GYRO X/Y/Z: %.3f %.3f %.3f", bufIMURawData[bufCount].xl.mX, bufIMURawData[bufCount].xl.mY, bufIMURawData[bufCount].xl.mZ, bufIMURawData[bufCount].gyro.mX, bufIMURawData[bufCount].gyro.mY, bufIMURawData[bufCount].gyro.mZ);
 
             // DEBUG - timing
             // uint64_t tEnd = esp_timer_get_time();
