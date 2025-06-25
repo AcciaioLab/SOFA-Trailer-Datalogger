@@ -173,6 +173,7 @@ int imuMeanData(IMUData rawData[], IMUSendData *data)
         data->roll = data->roll + rawData[i].gyro.mX;
         data->pitch = data->pitch + rawData[i].gyro.mY;
         data->yaw = data->yaw + rawData[i].gyro.mZ;
+        data->zRMS = data->zRMS + (rawData[i].xl.mZ * rawData[i].xl.mZ);
     }
 
     data->x = data->x / IMU_SAMPLE_RATE;
@@ -181,9 +182,72 @@ int imuMeanData(IMUData rawData[], IMUSendData *data)
     data->roll = data->roll / IMU_SAMPLE_RATE;
     data->pitch = data->pitch / IMU_SAMPLE_RATE;
     data->yaw = data->yaw / IMU_SAMPLE_RATE;
+    data->zRMS = data->zRMS / IMU_SAMPLE_RATE;
 
     // DEBUG
-    ESP_LOGI(SOFA_FUNC_TAG, "AVERAGE: XL X/Y/Z: %.3f %.3f %.3f GYRO X/Y/Z: %.3f %.3f %.3f", data->x, data->y, data->z, data->roll, data->pitch, data->yaw);
+    ESP_LOGI(SOFA_FUNC_TAG, "AVERAGE: XL X/Y/Z/ZRMS, %.6f, %.6f, %.6f, %.6f, GYRO X/Y/Z, %.6f, %.6f, %.6f,", data->x, data->y, data->z, data->zRMS, data->roll, data->pitch, data->yaw);
+
+    return 0;
+}
+
+/**
+ * @brief Packs the IMUSendData after all operations to be sent via CANBus (TWAI in ESP32).
+ * @param data IMUSendData processed ready to send 
+ * @param xlmsg pointer to XL IMUSendData struct
+ * @param gyromsg pointer to gyro IMUSendData struct
+ * @return int status (TODO)
+ */
+int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gyromsg, uint8_t stat)
+{
+    uint8_t mxl[7];
+    uint8_t mgyro[7];
+    int16_t xa, xg, ya, yg, za, zg;
+
+    // Unscale the XL data
+    xa = data->x / ACCEL_SCALE_8;
+    mxl[0] = (uint8_t)(xa & 0x00FF);
+    mxl[1] = (uint8_t)((xa & 0xFF00) >> 8);
+    // ESP_LOGI(SOFA_FUNC_TAG, "UNSCALE XL, %.6f, %04X, %02X, %02X,", data->x, xa, mxl[1], mxl[0]);
+
+    ya = data->y / ACCEL_SCALE_8;
+    mxl[2] = (uint8_t)(ya & 0x00FF);
+    mxl[3] = (uint8_t)((ya & 0xFF00) >> 8);
+
+    za = data->z / ACCEL_SCALE_8;
+    mxl[4] = (uint8_t)(za & 0x00FF);
+    mxl[5] = (uint8_t)((za & 0xFF00) >> 8);
+
+    // Unscale the XL data
+    xg = data->roll / GYRO_SCALE_1000;
+    mgyro[0] = (uint8_t)(xg & 0x00FF);
+    mgyro[1] = (uint8_t)((xg & 0xFF00) >> 8);
+
+    yg = data->pitch / GYRO_SCALE_1000;
+    mgyro[2] = (uint8_t)(yg & 0x00FF);
+    mgyro[3] = (uint8_t)((yg & 0xFF00) >> 8);
+
+    zg = data->yaw / GYRO_SCALE_1000;
+    mgyro[4] = (uint8_t)(zg & 0x00FF);
+    mgyro[5] = (uint8_t)((zg & 0xFF00) >> 8);
+    // ESP_LOGI(SOFA_FUNC_TAG, "UNSCALE GYRO, %.6f, %04X, %02X, %02X,", data->yaw, zg, mgyro[5], mgyro[4]);
+
+    // Move XL data into CAN message.
+    xlmsg->data[0] = mxl[0];
+    xlmsg->data[1] = mxl[1];
+    xlmsg->data[2] = mxl[2];
+    xlmsg->data[3] = mxl[3];
+    xlmsg->data[4] = mxl[4];
+    xlmsg->data[5] = mxl[5];
+    xlmsg->data[6] = stat;
+
+    // Move gyro data into CAN message.
+    gyromsg->data[0] = mgyro[0];
+    gyromsg->data[1] = mgyro[1];
+    gyromsg->data[2] = mgyro[2];
+    gyromsg->data[3] = mgyro[3];
+    gyromsg->data[4] = mgyro[4];
+    gyromsg->data[5] = mgyro[5];
+    gyromsg->data[6] = stat;
 
     return 0;
 }

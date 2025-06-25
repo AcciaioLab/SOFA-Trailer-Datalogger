@@ -139,10 +139,9 @@ static twai_message_t CAN_TEST = {
     .data = {0x00, 0x00, 0x00, 0x00},   // This gets reversed in the FMC. 
 };
 
-/*  
-*   Function prototypes
-*/ 
-
+/**
+ * Function prototypes
+ */  
 int configureGPIO(void);
 int IDInit(void);
 int twaiDriverStart(void);
@@ -251,8 +250,27 @@ void taskIMU(void *pvParameters)
             imuScaleData(bufRead.xl.m, &bufIMURawData[bufCount].xl, ACCEL_SCALE_8);
             imuScaleData(bufRead.gyro.m, &bufIMURawData[bufCount].gyro, GYRO_SCALE_1000);
 
+            // DEBUG
+            // ESP_LOGI(SOFA_DL_IMU, "XL X/Y/Z, %02X%02X, %.3f, %02X%02X, %.3f, %02X%02X, %.3f,", bufRead.xl.m[1], bufRead.xl.m[0], bufIMURawData[bufCount].xl.mX, bufRead.xl.m[3], bufRead.xl.m[2], bufIMURawData[bufCount].xl.mY, bufRead.xl.m[5], bufRead.xl.m[4], bufIMURawData[bufCount].xl.mZ);
+            // ESP_LOGI(SOFA_DL_IMU, "GRYO X/Y/Z, %02X%02X, %.3f, %02X%02X, %.3f, %02X%02X, %.3f,", bufRead.gyro.m[1], bufRead.gyro.m[0], bufIMURawData[bufCount].gyro.mX, bufRead.gyro.m[3], bufRead.gyro.m[2], bufIMURawData[bufCount].gyro.mY, bufRead.gyro.m[5], bufRead.gyro.m[4], bufIMURawData[bufCount].gyro.mZ);
+
             // 2 - Raw data through Madgwick filter
-            imuFusionAHRS(&ahrs, &bufIMURawData[bufCount]);
+            // imuFusionAHRS(&ahrs, &bufIMURawData[bufCount]);
+
+            // 3 - Remove gravity from acceleration data.
+            if (bufIMURawData[bufCount].xl.mZ > 0.0f)
+            {
+                bufIMURawData[bufCount].xl.mZ = bufIMURawData[bufCount].xl.mZ - 1.000f;
+            }
+            else if (bufIMURawData[bufCount].xl.mZ < 0.0f)
+            {
+                bufIMURawData[bufCount].xl.mZ = bufIMURawData[bufCount].xl.mZ + 1.000f;
+            }
+            
+
+            // DEBUG
+            // ESP_LOGI(SOFA_DL_IMU, "XL X/Y/Z, %.6f, %.6f, %.6f, GYRO X/Y/Z, %.6f, %.6f, %.6f,", bufIMURawData[bufCount].xl.mX, bufIMURawData[bufCount].xl.mY, bufIMURawData[bufCount].xl.mZ, bufIMURawData[bufCount].gyro.mX, bufIMURawData[bufCount].gyro.mY, bufIMURawData[bufCount].gyro.mZ);
+
 
             // Increment the buffer
             bufCount++;
@@ -260,12 +278,7 @@ void taskIMU(void *pvParameters)
             {
                 bufCount = 0;
             }
-
-            // DEBUG
-            ESP_LOGI(SOFA_DL_IMU, "XL X/Y/Z: %.3f %.3f %.3f GYRO X/Y/Z: %.3f %.3f %.3f", bufIMURawData[bufCount].xl.mX, bufIMURawData[bufCount].xl.mY, bufIMURawData[bufCount].xl.mZ, bufIMURawData[bufCount].gyro.mX, bufIMURawData[bufCount].gyro.mY, bufIMURawData[bufCount].gyro.mZ);
-
             
-
             // DEBUG - timing
             // uint64_t tEnd = esp_timer_get_time();
             // ESP_LOGI(SOFA_DL_IMU, "Format raw data XL/Gyro took %.3f ms", ((float)(tEnd-tStart)/1000));
@@ -276,10 +289,6 @@ void taskIMU(void *pvParameters)
         {
             ESP_LOGI(SOFA_DL_IMU, "IMU data sample buffer full, calc and send.");
 
-            
-
-            // 3 - Remove gravity from acceleration data.
-
             // 4 - More filtering (OPTIONAL at the moment)
             // Nothing now
 
@@ -288,34 +297,13 @@ void taskIMU(void *pvParameters)
             imuMeanData(bufIMURawData, &imuSend);
 
             // 6 - Send to FMC, package CAN data
+            imuCreateCANMsg(&imuSend, &CAN_Data_Accelerometer, &CAN_Data_Gyro, boardStatus);
 
             // DEBUG - timing
             uint64_t tOverallEnd = esp_timer_get_time();
             ESP_LOGI(SOFA_DL_IMU, "IMU data cycle took %.3f ms", ((float)(tOverallEnd-tOverallStart)/1000));
             tOverallStart = tOverallEnd;
         }
-
-        /* This is to be updated later
-        // Move into CAN message.
-        CAN_Data_Accelerometer.data[0] = acceldata.m[0];
-        CAN_Data_Accelerometer.data[1] = acceldata.m[1];
-        CAN_Data_Accelerometer.data[2] = acceldata.m[2];
-        CAN_Data_Accelerometer.data[3] = acceldata.m[3];
-        CAN_Data_Accelerometer.data[4] = acceldata.m[4];
-        CAN_Data_Accelerometer.data[5] = acceldata.m[5];
-        CAN_Data_Accelerometer.data[6] = boardStatus;
-        }
-
-        // Move into CAN message.
-        CAN_Data_Gyro.data[0] = gyrodata.m[0];
-        CAN_Data_Gyro.data[1] = gyrodata.m[1];
-        CAN_Data_Gyro.data[2] = gyrodata.m[2];
-        CAN_Data_Gyro.data[3] = gyrodata.m[3];
-        CAN_Data_Gyro.data[4] = gyrodata.m[4];
-        CAN_Data_Gyro.data[5] = gyrodata.m[5];
-        CAN_Data_Gyro.data[6] = boardStatus;
-        */
-
     }
 
     vTaskDelay(pdMS_TO_TICKS(1000));
@@ -374,10 +362,6 @@ void taskCANTx(void *pvParameters)
             CAN_TEST.data[1] = CAN_TEST.data[1] + 1;
         }
         CAN_TEST.data[0] = CAN_TEST.data[0] + 1;
-        // CAN_TEST.data[0] = 0xDE;
-        // CAN_TEST.data[1] = 0xAD;
-        // CAN_TEST.data[2] = 0xBE;
-        // CAN_TEST.data[3] = 0xEF;
 
         // Read the queue to see if a transmit action is required.
         CAN_control_actions actions;
@@ -508,9 +492,9 @@ void app_main(void)
     
     // Tasks
     xTaskCreatePinnedToCore(taskI2C, "Task_I2C", 4096, NULL, TASK_PRIORITY_I2C, NULL, tskNO_AFFINITY);
-    xTaskCreatePinnedToCore(taskIMU, "Task_IMU", 9999, NULL, TASK_PRIORITY_IMU, NULL, tskNO_AFFINITY); // on its own core
-    // xTaskCreatePinnedToCore(taskCANRx, "CANBus_Rx", 4096, NULL, TASK_PRIORITY_CAN_RX, NULL, tskNO_AFFINITY);
-    // xTaskCreatePinnedToCore(taskCANTx, "CANBus_Tx", 4096, NULL, TASK_PRIORITY_CAN_TX, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(taskIMU, "Task_IMU", 9999, NULL, TASK_PRIORITY_IMU, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(taskCANRx, "CANBus_Rx", 4096, NULL, TASK_PRIORITY_CAN_RX, NULL, tskNO_AFFINITY);
+    xTaskCreatePinnedToCore(taskCANTx, "CANBus_Tx", 4096, NULL, TASK_PRIORITY_CAN_TX, NULL, tskNO_AFFINITY);
     xTaskCreatePinnedToCore(taskCANCtrl, "CANBus_Ctrl", 4096, NULL, TASK_PRIORITY_CAN_CTRL, NULL, tskNO_AFFINITY);
 
     // Install gpio isr service
