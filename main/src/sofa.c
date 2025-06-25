@@ -141,7 +141,7 @@ int imuScaleData(uint8_t m[], IMUMeasureData *data, float scale)
  */
 int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data)
 {
-    ESP_LOGI(SOFA_FUNC_TAG, "Fusion AHRS filtering raw IMU data.");
+    // ESP_LOGI(SOFA_FUNC_TAG, "Fusion AHRS filtering raw IMU data.");
     // This follows the Fusion library simple example
     // https://github.com/xioTechnologies/Fusion/blob/main/Examples/Simple/main.c
 
@@ -156,10 +156,15 @@ int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data)
         .z = data->xl.mZ
     }};
 
-    FusionAhrsUpdateNoMagnetometer(ahrs, gyro, accel, 0.009615); // I don't know why a const doesn't work but a magic number does.
+    FusionAhrsUpdateNoMagnetometer(ahrs, gyro, accel, IMU_SAMPLE_PERIOD); // I don't know why a const doesn't work but a magic number does.
 
     const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(ahrs));
-    ESP_LOGI(SOFA_FUNC_TAG, "Roll %0.1f, Pitch %0.1f, Yaw %0.1f", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+
+    data->roll = euler.angle.roll;
+    data->pitch = euler.angle.pitch;
+    data->yaw = euler.angle.yaw;
+
+    // ESP_LOGI(SOFA_FUNC_TAG, "Roll %0.1f, Pitch %0.1f, Yaw %0.1f", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
 
     return 0;
 }
@@ -178,9 +183,9 @@ int imuMeanData(IMUData rawData[], IMUSendData *data)
         data->x = data->x + rawData[i].xl.mX;
         data->y = data->y + rawData[i].xl.mY;
         data->z = data->z + rawData[i].xl.mZ;
-        data->roll = data->roll + rawData[i].gyro.mX;
-        data->pitch = data->pitch + rawData[i].gyro.mY;
-        data->yaw = data->yaw + rawData[i].gyro.mZ;
+        data->roll = data->roll + rawData[i].roll;
+        data->pitch = data->pitch + rawData[i].pitch;
+        data->yaw = data->yaw + rawData[i].yaw;
         data->zRMS = data->zRMS + (rawData[i].xl.mZ * rawData[i].xl.mZ);
     }
 
@@ -211,7 +216,8 @@ int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gy
     uint8_t mxl[7];
     uint8_t mgyro[7];
     uint8_t mzrms[7];
-    int16_t xa, xg, ya, yg, za, zg, zrms;
+    int16_t xa, ya, za, zrms;
+    int16_t xg, yg, zg;
 
     // Unscale the XL data
     xa = data->x / ACCEL_SCALE_8;
@@ -232,15 +238,15 @@ int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gy
     mzrms[1] = (uint8_t)((zrms & 0xFF00) >> 8);
 
     // Unscale the XL data
-    xg = data->roll / GYRO_SCALE_1000;
+    xg = data->roll / EULER_ANGLE_SCALE;
     mgyro[0] = (uint8_t)(xg & 0x00FF);
     mgyro[1] = (uint8_t)((xg & 0xFF00) >> 8);
 
-    yg = data->pitch / GYRO_SCALE_1000;
+    yg = data->pitch / EULER_ANGLE_SCALE;
     mgyro[2] = (uint8_t)(yg & 0x00FF);
     mgyro[3] = (uint8_t)((yg & 0xFF00) >> 8);
 
-    zg = data->yaw / GYRO_SCALE_1000;
+    zg = data->yaw / EULER_ANGLE_SCALE;
     mgyro[4] = (uint8_t)(zg & 0x00FF);
     mgyro[5] = (uint8_t)((zg & 0xFF00) >> 8);
     // ESP_LOGI(SOFA_FUNC_TAG, "UNSCALE GYRO, %.6f, %04X, %02X, %02X,", data->yaw, zg, mgyro[5], mgyro[4]);

@@ -18,7 +18,7 @@
 static char *SOFA_FUNC_TAG = "SOFA_DL_FUNC";
 
 #define IMU_SAMPLE_RATE 104
-#define IMU_SAMPLE_PERIOD (1/IMU_SAMPLE_RATE)
+#define IMU_SAMPLE_PERIOD 0.009615
 
 // Data ready
 static const uint8_t WHOAMI = 0x6C;
@@ -37,6 +37,9 @@ static const float A_ST_MIN = 0.050;
 static const float A_ST_MAX = 1.700;
 static const float G_ST_MIN_2000 = 150;
 static const float G_ST_MAX_2000 = 700;
+
+// R/P/Y
+static const float EULER_ANGLE_SCALE = 0.005493;    // +/-180 deg
 
 // Board ID
 enum boardID
@@ -61,6 +64,7 @@ typedef struct {
 typedef struct {
     IMUMeasureData xl;
     IMUMeasureData gyro;
+    float roll, pitch, yaw;
 } IMUData;
 
 typedef struct {
