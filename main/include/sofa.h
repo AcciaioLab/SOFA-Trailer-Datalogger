@@ -79,7 +79,7 @@ int imuReadGData(i2cReadIMUReg *data, bool check);
 int imuScaleData(uint8_t m[], IMUMeasureData *data, float scale);
 int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data);
 int imuMeanData(IMUData rawData[], IMUSendData *data);
-int imuCreateCANMsg(IMUSendData *data, twai_message_t *msg, twai_message_t *gyromsg, uint8_t stat);
+int imuCreateCANMsg(IMUSendData *data, twai_message_t *msg, twai_message_t *gyromsg, twai_message_t *rmsmsg, uint8_t stat);
 uint8_t imuSelfTestA(void);
 uint8_t imuSelfTestG(void);
 

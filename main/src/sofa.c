@@ -145,10 +145,18 @@ int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data)
     // This follows the Fusion library simple example
     // https://github.com/xioTechnologies/Fusion/blob/main/Examples/Simple/main.c
 
-    FusionVector gyro = {};
-    FusionVector accel = {};
+    const FusionVector gyro = {.axis = {
+        .x = data->gyro.mX, 
+        .y = data->gyro.mY, 
+        .z = data->gyro.mZ
+    }};
+    const FusionVector accel = {.axis = {
+        .x = data->xl.mX, 
+        .y = data->xl.mY, 
+        .z = data->xl.mZ
+    }};
 
-    FusionAhrsUpdateNoMagnetometer(ahrs, gyro, accel, IMU_SAMPLE_PERIOD);
+    FusionAhrsUpdateNoMagnetometer(ahrs, gyro, accel, 0.009615); // I don't know why a const doesn't work but a magic number does.
 
     const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(ahrs));
     ESP_LOGI(SOFA_FUNC_TAG, "Roll %0.1f, Pitch %0.1f, Yaw %0.1f", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
@@ -197,11 +205,13 @@ int imuMeanData(IMUData rawData[], IMUSendData *data)
  * @param gyromsg pointer to gyro IMUSendData struct
  * @return int status (TODO)
  */
-int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gyromsg, uint8_t stat)
+int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gyromsg, twai_message_t *rmsmsg, uint8_t stat)
 {
+    // This is awful repetitive code that needs to be split into a few functions. It hurts my eyes.
     uint8_t mxl[7];
     uint8_t mgyro[7];
-    int16_t xa, xg, ya, yg, za, zg;
+    uint8_t mzrms[7];
+    int16_t xa, xg, ya, yg, za, zg, zrms;
 
     // Unscale the XL data
     xa = data->x / ACCEL_SCALE_8;
@@ -216,6 +226,10 @@ int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gy
     za = data->z / ACCEL_SCALE_8;
     mxl[4] = (uint8_t)(za & 0x00FF);
     mxl[5] = (uint8_t)((za & 0xFF00) >> 8);
+
+    zrms = data->zRMS / ACCEL_SCALE_8;
+    mzrms[0] = (uint8_t)(zrms & 0x00FF);
+    mzrms[1] = (uint8_t)((zrms & 0xFF00) >> 8);
 
     // Unscale the XL data
     xg = data->roll / GYRO_SCALE_1000;
@@ -248,6 +262,15 @@ int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gy
     gyromsg->data[4] = mgyro[4];
     gyromsg->data[5] = mgyro[5];
     gyromsg->data[6] = stat;
+
+    // Move rms data into CAN message.
+    rmsmsg->data[0] = mzrms[0];
+    rmsmsg->data[1] = mzrms[1];
+    rmsmsg->data[2] = mzrms[2] = 0;
+    rmsmsg->data[3] = mzrms[3] = 0;
+    rmsmsg->data[4] = mzrms[4] = 0;
+    rmsmsg->data[5] = mzrms[5] = 0;
+    rmsmsg->data[6] = stat;
 
     return 0;
 }

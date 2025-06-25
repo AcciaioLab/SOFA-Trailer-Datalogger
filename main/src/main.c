@@ -45,6 +45,7 @@ static char *CAN_ACCEL_TAG = "SOFA_DL_CAN";
 // Board IDs
 uint32_t CAN_ID_Accel = 0xFFFFFFFF;
 uint32_t CAN_ID_Gyro = 0xFFFFFFFF;
+uint32_t CAN_ID_RMS = 0xFFFFFFFF;
 
 // Tasks
 #define TASK_PRIORITY_I2C 5
@@ -96,11 +97,9 @@ typedef enum {
 #define DATA_PERIOD_MS                  500
 #define ITER_DELAY_MS                   1000
 
-// #define CAN_ID_ACCEL_RTR                0x0300
-// #define CAN_ID_ACCEL_DATA               0xFF0101FF
-// #define CAN_ID_GYRO_DATA                0xFF0102FF
 uint32_t CAN_ID_ACCEL_DATA = 0xFFFFFFFF;    // Variable to be setup as part of board ID
 uint32_t CAN_ID_GYRO_DATA = 0xFFFFFFFF;     // Variable to be setup as part of board ID
+uint32_t CAN_ID_RMS_DATA = 0xFFFFFFFF;     // Variable to be setup as part of board ID
 
 #define CAN_ID_TEST                     0xFF0333FF
 
@@ -126,6 +125,7 @@ static const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 // CAN messages
 static twai_message_t CAN_Data_Accelerometer;
 static twai_message_t CAN_Data_Gyro;
+static twai_message_t CAN_Data_RMS;
 static twai_message_t CAN_TEST = {
     // Message type and format settings
     .extd = 0,              // Standard Format message (11-bit ID)
@@ -272,7 +272,7 @@ void taskIMU(void *pvParameters)
             // ESP_LOGI(SOFA_DL_IMU, "XL X/Y/Z, %.6f, %.6f, %.6f, GYRO X/Y/Z, %.6f, %.6f, %.6f,", bufIMURawData[bufCount].xl.mX, bufIMURawData[bufCount].xl.mY, bufIMURawData[bufCount].xl.mZ, bufIMURawData[bufCount].gyro.mX, bufIMURawData[bufCount].gyro.mY, bufIMURawData[bufCount].gyro.mZ);
 
 
-            // Increment the buffer
+            // Increment the buffer count to the next position
             bufCount++;
             if (bufCount > (IMU_SAMPLE_RATE - 1))
             {
@@ -287,7 +287,8 @@ void taskIMU(void *pvParameters)
         // When at the end of the samples / sec, calc and send
         if (bufCount == (IMU_SAMPLE_RATE - 1))
         {
-            ESP_LOGI(SOFA_DL_IMU, "IMU data sample buffer full, calc and send.");
+            // DEBUG
+            // ESP_LOGI(SOFA_DL_IMU, "IMU data sample buffer full, calc and send.");
 
             // 4 - More filtering (OPTIONAL at the moment)
             // Nothing now
@@ -297,7 +298,7 @@ void taskIMU(void *pvParameters)
             imuMeanData(bufIMURawData, &imuSend);
 
             // 6 - Send to FMC, package CAN data
-            imuCreateCANMsg(&imuSend, &CAN_Data_Accelerometer, &CAN_Data_Gyro, boardStatus);
+            imuCreateCANMsg(&imuSend, &CAN_Data_Accelerometer, &CAN_Data_Gyro, &CAN_Data_RMS, boardStatus);
 
             // DEBUG - timing
             uint64_t tOverallEnd = esp_timer_get_time();
@@ -342,6 +343,8 @@ void taskCANRx(void *pvParameters)
                 // esp_err_t err_rxrtr = twai_receive(&received_msg, portMAX_DELAY);
             }
         }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     xSemaphoreGive(SEM_CAN_Control);
@@ -355,13 +358,13 @@ void taskCANTx(void *pvParameters)
     while (1)
     {
         // DEBUG counter
-        twai_transmit(&CAN_TEST, portMAX_DELAY);
-        ESP_LOGI(CAN_ACCEL_TAG, "CANBUS transmit task sent CAN_TEST, %u", (CAN_TEST.data[1]+CAN_TEST.data[0]));
-        if (CAN_TEST.data[0] == 0xFF)
-        {
-            CAN_TEST.data[1] = CAN_TEST.data[1] + 1;
-        }
-        CAN_TEST.data[0] = CAN_TEST.data[0] + 1;
+        // twai_transmit(&CAN_TEST, portMAX_DELAY);
+        // ESP_LOGI(CAN_ACCEL_TAG, "CANBUS transmit task sent CAN_TEST, %u", (CAN_TEST.data[1]+CAN_TEST.data[0]));
+        // if (CAN_TEST.data[0] == 0xFF)
+        // {
+        //     CAN_TEST.data[1] = CAN_TEST.data[1] + 1;
+        // }
+        // CAN_TEST.data[0] = CAN_TEST.data[0] + 1;
 
         // Read the queue to see if a transmit action is required.
         CAN_control_actions actions;
@@ -376,6 +379,7 @@ void taskCANTx(void *pvParameters)
 
             twai_transmit(&CAN_Data_Accelerometer, portMAX_DELAY);
             twai_transmit(&CAN_Data_Gyro, portMAX_DELAY);
+            twai_transmit(&CAN_Data_RMS, portMAX_DELAY);
 
             ESP_LOGI(CAN_ACCEL_TAG, "CANBUS transmit task sent accelerometer and gyro data.");
 
@@ -472,6 +476,7 @@ void app_main(void)
     // Only call after setCANID()
     setCANMessageID(&CAN_Data_Accelerometer, CAN_ID_Accel, 7);
     setCANMessageID(&CAN_Data_Gyro, CAN_ID_Gyro, 7);
+    setCANMessageID(&CAN_Data_RMS, CAN_ID_RMS, 7);
     
     // Start the TWAI driver
     twaiDriverStart();
@@ -668,6 +673,8 @@ int setCANID(uint32_t id)
     // n = NUM, 1 accel, 2 gyro
     CAN_ID_Accel = (id << 16) | 0xFF0011FF;
     CAN_ID_Gyro = (id << 16) | 0xFF0012FF;
+    CAN_ID_RMS = (id << 16) | 0xFF0013FF;
+
 
     return 0;
 }
