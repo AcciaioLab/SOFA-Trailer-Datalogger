@@ -46,6 +46,7 @@ static char *CAN_ACCEL_TAG = "SOFA_DL_CAN";
 uint32_t CAN_ID_Accel = 0xFFFFFFFF;
 uint32_t CAN_ID_Gyro = 0xFFFFFFFF;
 uint32_t CAN_ID_RMS = 0xFFFFFFFF;
+uint32_t CAN_ID_TEST = 0xFFFFFFFF;
 
 // Tasks
 #define TASK_PRIORITY_I2C 5
@@ -57,15 +58,16 @@ uint32_t CAN_ID_RMS = 0xFFFFFFFF;
 #define ESP_INTR_FLAG_DEFAULT 0
 
 // Pins
-#define CAN_RX_GPIO 14 // GPIO used for CAN Rx
-#define CAN_TX_GPIO 13 // GPIO used for CAN Tx
+#define CAN_RX_GPIO 13 // GPIO used for CAN Rx
+#define CAN_TX_GPIO 14 // GPIO used for CAN Tx
 #define GPIO_ID_JMPR_1 12 // GPIO used for ID Jumper 1
 #define GPIO_ID_JMPR_2 48 // GPIO used for ID Jumper 2
 #define GPIO_ID_JMPR_3 47 // GPIO used for ID Jumper 3
 #define GPIO_IMU_XL_INT 6 // GPIO used for IMU interrupt for XL data
+#define GPIO_FORCE_ON 17 // GPIO used to force the board on if the voltage drops
 
 // Device Constants
-static const int STARTUP_DELAY = 3; // Delay time at boot to line up with FMC650
+static const int STARTUP_DELAY = 10; // Delay time at boot to line up with FMC650
 
 // Queues and Semaphores
 static QueueHandle_t queueIntXL;
@@ -100,8 +102,7 @@ typedef enum {
 uint32_t CAN_ID_ACCEL_DATA = 0xFFFFFFFF;    // Variable to be setup as part of board ID
 uint32_t CAN_ID_GYRO_DATA = 0xFFFFFFFF;     // Variable to be setup as part of board ID
 uint32_t CAN_ID_RMS_DATA = 0xFFFFFFFF;     // Variable to be setup as part of board ID
-
-#define CAN_ID_TEST                     0xFF0333FF
+uint32_t CAN_ID_TEST_DATA = 0xFFFFFFFF;     // Variable to be setup as part of board ID
 
 /* 
  * CAN BUS data
@@ -126,18 +127,7 @@ static const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 static twai_message_t CAN_Data_Accelerometer;
 static twai_message_t CAN_Data_Gyro;
 static twai_message_t CAN_Data_RMS;
-static twai_message_t CAN_TEST = {
-    // Message type and format settings
-    .extd = 0,              // Standard Format message (11-bit ID)
-    .rtr = 0,               // Send a data frame
-    .ss = 0,                // Not single shot
-    .self = 0,              // Not a self reception request
-    .dlc_non_comp = 0,      // DLC is less than 8
-    // Message ID and payload
-    .identifier = CAN_ID_TEST,
-    .data_length_code = 4,
-    .data = {0x00, 0x00, 0x00, 0x00},   // This gets reversed in the FMC. 
-};
+static twai_message_t CAN_TEST;
 
 /**
  * Function prototypes
@@ -215,6 +205,9 @@ void taskIMU(void *pvParameters)
 
     // Log the accelerometer task has started.
     ESP_LOGI(SOFA_DL_IMU, "IMU task created.");
+
+    // Force GPIO 17 high
+    gpio_set_level(GPIO_FORCE_ON, 1);
 
     // Start i2c
     i2cBusStart();
@@ -314,8 +307,16 @@ void taskCANRx(void *pvParameters)
 {
     ESP_LOGI(CAN_ACCEL_TAG, "CANBUS receive task started.");
 
+    twai_message_t received_msg;
+
     while (1)
     {
+        /// DEBUG - sniff the canbus
+        // if (twai_receive(&received_msg, portMAX_DELAY) == ESP_OK)
+        // {
+        //     ESP_LOGI(CAN_ACCEL_TAG, "Received from %lu data %u", received_msg.identifier, received_msg.data[0]);
+        // }
+        
         // Read the queue to see if a receive action is required.
         CAN_control_actions actions;
         xQueueReceive(CAN_rx_queue, &actions, portMAX_DELAY);
@@ -338,11 +339,11 @@ void taskCANRx(void *pvParameters)
             {
                 // Waiting to receive request
                 ESP_LOGI(CAN_ACCEL_TAG, "CANBUS receive task waiting to receive request for data.");
-                // esp_err_t err_rxrtr = twai_receive(&received_msg, portMAX_DELAY);
+                esp_err_t err_rxrtr = twai_receive(&received_msg, portMAX_DELAY);
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 
     xSemaphoreGive(SEM_CAN_Control);
@@ -355,15 +356,6 @@ void taskCANTx(void *pvParameters)
 
     while (1)
     {
-        // DEBUG counter
-        // twai_transmit(&CAN_TEST, portMAX_DELAY);
-        // ESP_LOGI(CAN_ACCEL_TAG, "CANBUS transmit task sent CAN_TEST, %u", (CAN_TEST.data[1]+CAN_TEST.data[0]));
-        // if (CAN_TEST.data[0] == 0xFF)
-        // {
-        //     CAN_TEST.data[1] = CAN_TEST.data[1] + 1;
-        // }
-        // CAN_TEST.data[0] = CAN_TEST.data[0] + 1;
-
         // Read the queue to see if a transmit action is required.
         CAN_control_actions actions;
         xQueueReceive(CAN_tx_queue, &actions, portMAX_DELAY);
@@ -378,6 +370,35 @@ void taskCANTx(void *pvParameters)
             twai_transmit(&CAN_Data_Accelerometer, portMAX_DELAY);
             twai_transmit(&CAN_Data_Gyro, portMAX_DELAY);
             twai_transmit(&CAN_Data_RMS, portMAX_DELAY);
+            twai_transmit(&CAN_TEST, portMAX_DELAY);
+            // if (err != ESP_OK)
+            // {
+            //     ESP_LOGI(CAN_ACCEL_TAG, "ERROR SENDING CAN...!!!!!!!!");
+            //     if (err == ESP_ERR_INVALID_ARG)
+            //     {
+            //         ESP_LOGI(CAN_ACCEL_TAG, "ERROR INVALID ARG...!!!!!!!!");
+            //     }
+            //     if (err == ESP_ERR_TIMEOUT)
+            //     {
+            //         ESP_LOGI(CAN_ACCEL_TAG, "ERROR TIMEOUT...!!!!!!!!");
+            //     }
+            //     if (err == ESP_FAIL)
+            //     {
+            //         ESP_LOGI(CAN_ACCEL_TAG, "ERROR FAIL...!!!!!!!!");
+            //     }
+            //     if (err == ESP_ERR_INVALID_STATE)
+            //     {
+            //         ESP_LOGI(CAN_ACCEL_TAG, "ERROR INVALID STATE...!!!!!!!!");
+            //     }
+            //     if (err == ESP_ERR_NOT_SUPPORTED)
+            //     {
+            //         ESP_LOGI(CAN_ACCEL_TAG, "ERROR NOT SUPPORTED...!!!!!!!!");
+            //     }
+            // }
+
+
+            // ESP_LOGI(CAN_ACCEL_TAG, "TEST DATA %d.", CAN_TEST.data[0]);
+            CAN_TEST.data[0]++;
 
             ESP_LOGI(CAN_ACCEL_TAG, "CANBUS transmit task sent accelerometer and gyro data.");
 
@@ -475,6 +496,7 @@ void app_main(void)
     setCANMessageID(&CAN_Data_Accelerometer, CAN_ID_Accel, 7);
     setCANMessageID(&CAN_Data_Gyro, CAN_ID_Gyro, 7);
     setCANMessageID(&CAN_Data_RMS, CAN_ID_RMS, 7);
+    setCANMessageID(&CAN_TEST, CAN_ID_TEST, 7);
     
     // Start the TWAI driver
     twaiDriverStart();
@@ -544,7 +566,14 @@ int configureGPIO(void)
     gpioInputConfig.pull_up_en = 1;
     gpio_config(&gpioInputConfig);
 
-    // gpio_set_intr_type(GPIO_NUM_6, GPIO_INTR_POSEDGE);
+    // Set the GPIO config ID jumper outputs
+    gpio_config_t gpioOutputConfig = {};
+    gpioInputConfig.intr_type = GPIO_INTR_DISABLE;
+    gpioInputConfig.mode = GPIO_MODE_OUTPUT;
+    gpioInputConfig.pin_bit_mask = (1ULL << GPIO_FORCE_ON);
+    gpioInputConfig.pull_down_en = 0;
+    gpioInputConfig.pull_up_en = 1;
+    gpio_config(&gpioInputConfig);
 
     // Set the GPIO config for IMU interrupt pin
     gpio_config_t gpioIntConfig = {};
@@ -665,14 +694,14 @@ int twaiDriverEnd(void)
 // Sets the CAN IDs for messages based on board ID.
 int setCANID(uint32_t id)
 {
-    // Standard message ID length, stored in uint32_t as 0xFF0isnFF, where
+    // Standard message ID length, stored in uint32_t as 0x0000isn, where
     // i = ID
     // s = SET (not used)
-    // n = NUM, 1 accel, 2 gyro
-    CAN_ID_Accel = (id << 16) | 0xFF0011FF;
-    CAN_ID_Gyro = (id << 16) | 0xFF0012FF;
-    CAN_ID_RMS = (id << 16) | 0xFF0013FF;
-
+    // n = NUM, 1 accel, 2 gyro, 3 RMS, 0 diag
+    CAN_ID_Accel = (id << 8) | 0x00000011;
+    CAN_ID_Gyro = (id << 8) | 0x00000012;
+    CAN_ID_RMS = (id << 8) | 0x00000013;
+    CAN_ID_TEST = (id << 8) | 0x00000020;
 
     return 0;
 }
