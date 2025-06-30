@@ -295,8 +295,8 @@ void imuWhoAmI(void)
     // WHO_AM_I returns 0x6C.
     while (regWhoAmI.rx != WHOAMI)
     {
-        i2cReadReg(&regWhoAmI);
         ESP_LOGI(SOFA_FUNC_TAG, "Connecting to accelerometer on I2C bus at address 0x6A.");
+        i2cReadReg(&regWhoAmI);
     }
 
     // Log that we saw the accelerometer

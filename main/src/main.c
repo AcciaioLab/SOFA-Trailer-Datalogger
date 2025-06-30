@@ -2,11 +2,11 @@
  * SOFA TRAILER DATALOGGER
  * 
  * Connects and reads accelerometer data from LSM6DSOX via I2C.
- * Sends the accelerometer and gyroscope data to the FMC650 via CANBus.
+ * Uses the fusion algorithm to compensate gyro data to calculate roll, pitch, yaw.
+ * Sends the accelerometer and R/P/Y data to the FMC650 via CANBus.
  *
  * Based on twai_network_example_slave and twai_network_example_master for CAN bus comms
  * Based on i2c_basic_example for I2C comms
- * 
  * 
  */
 
@@ -64,10 +64,12 @@ uint32_t CAN_ID_TEST = 0xFFFFFFFF;
 #define GPIO_ID_JMPR_2 48 // GPIO used for ID Jumper 2
 #define GPIO_ID_JMPR_3 47 // GPIO used for ID Jumper 3
 #define GPIO_IMU_XL_INT 6 // GPIO used for IMU interrupt for XL data
+#define GPIO_IMU_SDOSAO 7 // GPIO used to select i2c device address
+#define GPIO_IMU_CS 15 // GPIO used to enable i2c comms
 #define GPIO_FORCE_ON 17 // GPIO used to force the board on if the voltage drops
 
 // Device Constants
-static const int STARTUP_DELAY = 10; // Delay time at boot to line up with FMC650
+static const int STARTUP_DELAY = 15; // Delay time at boot to line up with FMC650
 
 // Queues and Semaphores
 static QueueHandle_t queueIntXL;
@@ -138,6 +140,7 @@ int twaiDriverStart(void);
 int twaiDriverEnd(void);
 int setCANID(uint32_t id);
 int setCANMessageID(twai_message_t *message, uint32_t id, uint8_t length);
+int setSystemGPIO(void);
 
 static void IRAM_ATTR intHandler(void *arg)
 {
@@ -205,9 +208,6 @@ void taskIMU(void *pvParameters)
 
     // Log the accelerometer task has started.
     ESP_LOGI(SOFA_DL_IMU, "IMU task created.");
-
-    // Force GPIO 17 high
-    gpio_set_level(GPIO_FORCE_ON, 1);
 
     // Start i2c
     i2cBusStart();
@@ -488,6 +488,8 @@ void app_main(void)
     // Configure the GPIOs
     configureGPIO();
 
+    setSystemGPIO();
+
     // Read and set this board's ID
     IDInit();
     setCANID((uint32_t)SOFA_DL_ID);
@@ -568,12 +570,12 @@ int configureGPIO(void)
 
     // Set the GPIO config ID jumper outputs
     gpio_config_t gpioOutputConfig = {};
-    gpioInputConfig.intr_type = GPIO_INTR_DISABLE;
-    gpioInputConfig.mode = GPIO_MODE_OUTPUT;
-    gpioInputConfig.pin_bit_mask = (1ULL << GPIO_FORCE_ON);
-    gpioInputConfig.pull_down_en = 0;
-    gpioInputConfig.pull_up_en = 1;
-    gpio_config(&gpioInputConfig);
+    gpioOutputConfig.intr_type = GPIO_INTR_DISABLE;
+    gpioOutputConfig.mode = GPIO_MODE_OUTPUT;
+    gpioOutputConfig.pin_bit_mask = (1ULL << GPIO_IMU_SDOSAO) | (1ULL << GPIO_IMU_CS) | (1ULL << GPIO_FORCE_ON);
+    gpioOutputConfig.pull_down_en = 0;
+    gpioOutputConfig.pull_up_en = 1;
+    gpio_config(&gpioOutputConfig);
 
     // Set the GPIO config for IMU interrupt pin
     gpio_config_t gpioIntConfig = {};
@@ -729,5 +731,22 @@ int setCANMessageID(twai_message_t *message, uint32_t id, uint8_t length)
 
     ESP_LOGI(CAN_ACCEL_TAG, "CAN message created - ID: %#08lX, DLC: %d, EXTD: %d, RTR: %d, SS: %d, SELF: %d, DLC_NON_COMP: %d.", message->identifier, message->data_length_code, message->extd, message->rtr, message->ss, message->self, message->dlc_non_comp);
 
+    return 0;
+}
+
+int setSystemGPIO(void)
+{
+    // Force GPIOs for system functionality
+
+    // i2c address select for IMU, low for 0x6A
+    gpio_set_level(GPIO_IMU_SDOSAO, 0);
+
+    // Chip select high enable i2c (this worked without setting)
+    gpio_set_level(GPIO_IMU_CS, 1);
+
+    // FORCE_ON to board voltage switch to stay on if voltage falls below switch off votlage
+    gpio_set_level(GPIO_FORCE_ON, 1);
+
+    // TODO: Return status
     return 0;
 }
