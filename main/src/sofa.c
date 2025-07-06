@@ -139,26 +139,33 @@ int imuScaleData(uint8_t m[], IMUMeasureData *data, float scale)
  * @param data pointer to IMUData with the last received IMU data.
  * @return int status (TODO)
  */
-int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data)
+int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data, FusionOffset *offset)
 {
     // ESP_LOGI(SOFA_FUNC_TAG, "Fusion AHRS filtering raw IMU data.");
     // This follows the Fusion library simple example
     // https://github.com/xioTechnologies/Fusion/blob/main/Examples/Simple/main.c
 
-    const FusionVector gyro = {.axis = {
+    FusionVector gyro = {.axis = {
         .x = data->gyro.mX, 
         .y = data->gyro.mY, 
         .z = data->gyro.mZ
     }};
-    const FusionVector accel = {.axis = {
+    FusionVector accel = {.axis = {
         .x = data->xl.mX, 
         .y = data->xl.mY, 
         .z = data->xl.mZ
     }};
 
+    gyro = FusionOffsetUpdate(offset, gyro);
+
     FusionAhrsUpdateNoMagnetometer(ahrs, gyro, accel, IMU_SAMPLE_PERIOD); // I don't know why a const doesn't work but a magic number does.
 
     const FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(ahrs));
+    const FusionVector earth = FusionAhrsGetEarthAcceleration(ahrs);
+
+    data->xl.mX = earth.axis.x;
+    data->xl.mY = earth.axis.y;
+    data->xl.mZ = earth.axis.z;
 
     data->roll = euler.angle.roll;
     data->pitch = euler.angle.pitch;
