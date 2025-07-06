@@ -396,7 +396,6 @@ void taskCANTx(void *pvParameters)
             //     }
             // }
 
-
             // ESP_LOGI(CAN_ACCEL_TAG, "TEST DATA %d.", CAN_TEST.data[0]);
             CAN_TEST.data[0]++;
 
