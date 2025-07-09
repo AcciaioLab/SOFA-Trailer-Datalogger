@@ -221,8 +221,22 @@ void taskIMU(void *pvParameters)
     IMUData bufIMURawData[IMU_SAMPLE_RATE];
 
     // Setup Fusion
+    FusionOffset ahrsOffset;
     FusionAhrs ahrs;
+
+    FusionOffsetInitialise(&ahrsOffset, IMU_SAMPLE_RATE);
     FusionAhrsInitialise(&ahrs);
+
+    // Set AHRS algorithm settings
+    const FusionAhrsSettings ahrsSettings = {
+        .convention = FusionConventionNed,
+        .gain = 0.5f,
+        .gyroscopeRange = 1000.0f, /* replace this with actual gyroscope range in degrees/s */
+        .accelerationRejection = 10.0f,
+        .magneticRejection = 10.0f,
+        .recoveryTriggerPeriod = 5 * IMU_SAMPLE_RATE, /* 5 seconds */
+    };
+    FusionAhrsSetSettings(&ahrs, &ahrsSettings);
 
     // Loop to read in accelerometer data
     // DEBUG - timing
@@ -243,25 +257,11 @@ void taskIMU(void *pvParameters)
             imuScaleData(bufRead.xl.m, &bufIMURawData[bufCount].xl, ACCEL_SCALE_8);
             imuScaleData(bufRead.gyro.m, &bufIMURawData[bufCount].gyro, GYRO_SCALE_1000);
 
-            // DEBUG
-            // ESP_LOGI(SOFA_DL_IMU, "XL X/Y/Z, %02X%02X, %.3f, %02X%02X, %.3f, %02X%02X, %.3f,", bufRead.xl.m[1], bufRead.xl.m[0], bufIMURawData[bufCount].xl.mX, bufRead.xl.m[3], bufRead.xl.m[2], bufIMURawData[bufCount].xl.mY, bufRead.xl.m[5], bufRead.xl.m[4], bufIMURawData[bufCount].xl.mZ);
-            // ESP_LOGI(SOFA_DL_IMU, "GRYO X/Y/Z, %02X%02X, %.3f, %02X%02X, %.3f, %02X%02X, %.3f,", bufRead.gyro.m[1], bufRead.gyro.m[0], bufIMURawData[bufCount].gyro.mX, bufRead.gyro.m[3], bufRead.gyro.m[2], bufIMURawData[bufCount].gyro.mY, bufRead.gyro.m[5], bufRead.gyro.m[4], bufIMURawData[bufCount].gyro.mZ);
-
             // 2 - Raw data through fusion algorithm
-            imuFusionAHRS(&ahrs, &bufIMURawData[bufCount]);
+            imuFusionAHRS(&ahrs, &bufIMURawData[bufCount], &ahrsOffset);
 
             // 3 - Remove gravity from acceleration data.
-            if (bufIMURawData[bufCount].xl.mZ > 0.0f)
-            {
-                bufIMURawData[bufCount].xl.mZ = bufIMURawData[bufCount].xl.mZ - 0.981f;
-            }
-            else if (bufIMURawData[bufCount].xl.mZ < 0.0f)
-            {
-                bufIMURawData[bufCount].xl.mZ = bufIMURawData[bufCount].xl.mZ + 0.981f;
-            }
-            
-            // DEBUG
-            // ESP_LOGI(SOFA_DL_IMU, "XL X/Y/Z, %.6f, %.6f, %.6f, GYRO X/Y/Z, %.6f, %.6f, %.6f,", bufIMURawData[bufCount].xl.mX, bufIMURawData[bufCount].xl.mY, bufIMURawData[bufCount].xl.mZ, bufIMURawData[bufCount].gyro.mX, bufIMURawData[bufCount].gyro.mY, bufIMURawData[bufCount].gyro.mZ);
+            // This is now dine in the imuFusionAHRS function with the inbuilt FusionAhrsGetEarthAcceleration()
 
             // Increment the buffer count to the next position
             bufCount++;
