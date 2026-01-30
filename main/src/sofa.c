@@ -42,8 +42,7 @@ int imuReadAData(i2cReadIMUReg *data, bool check)
 {
     int err = 0;
 
-    if (check)
-    {
+    if (check) {
         i2cRead1Reg regDataReady = {
             .tx = 0x1E,     // STATUS_REG register
             .rx = 0x00,     // No expectation
@@ -55,9 +54,8 @@ int imuReadAData(i2cReadIMUReg *data, bool check)
 
         // ESP_LOGI(SOFA_FUNC_TAG, "Checking XLDA XL data available...");
 
-        while (dataAvailable != XLDA)
-        {
-            i2cReadReg(&regDataReady);
+        while (dataAvailable != XLDA) {
+            err -= i2cReadReg(&regDataReady);
             dataAvailable = regDataReady.rx & XLDA;
         }
 
@@ -65,7 +63,7 @@ int imuReadAData(i2cReadIMUReg *data, bool check)
     }
     
     // New accel data is available, read it.
-    err = i2cReadDataReg(data);
+    err -= i2cReadDataReg(data);
 
     return err;
 }
@@ -81,30 +79,28 @@ int imuReadGData(i2cReadIMUReg *data, bool check)
 {
     int err = 0;
 
-    if (check)
-    {
+    if (check) {
         i2cRead1Reg regDataReady = {
             .tx = 0x1E,     // STATUS_REG register
             .rx = 0x00,     // No expectation
             .err = ESP_FAIL
         };  
 
-        // Check accel data is available.
+        // Check gyro data is available.
         uint8_t dataAvailable = 0x00;
 
         // ESP_LOGI(SOFA_FUNC_TAG, "Checking GDA gyro data available...");
 
-        while (dataAvailable != GDA)
-        {
-            i2cReadReg(&regDataReady);
+        while (dataAvailable != GDA) {
+            err -= i2cReadReg(&regDataReady);
             dataAvailable = regDataReady.rx & GDA;
         }
 
         // ESP_LOGI(SOFA_FUNC_TAG, "GDA gyro data is available.");
     }
 
-    // New accel data is available, read it.
-    err = i2cReadDataReg(data);
+    // New gyro data is available, read it.
+    err -= i2cReadDataReg(data);
 
     return err;
 }
@@ -177,23 +173,39 @@ int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data, FusionOffset *offset)
 }
 
 /**
- * @brief Calculates the mean of the IMU data and saves the result in the send data struct.
+ * @brief Performs calculations on the IMU data and saves the result in the send data struct.
  * @param rawData IMUData raw data array 
  * @param data pointer to IMUSendData struct
  * @return int status (TODO)
  */
-int imuMeanData(IMUData rawData[], IMUSendData *data)
+int imuCalcData(IMUData rawData[], IMUSendData *data)
 {
     int i = 0;
-    for (i = 0; i < IMU_SAMPLE_RATE; i++)
-    {
+
+    // Set data to 0 to start
+    data->x = data->y = data->z = 0;
+    data->roll = data->pitch = data->yaw = 0;
+    data->zRMS = 0;
+    data->zMin = rawData[0].xl.mZ; // Set to the first value
+    data->zMax = rawData[0].xl.mZ; // Set to the first value
+
+    for (i = 0; i < IMU_SAMPLE_RATE; i++) {
         data->x = data->x + rawData[i].xl.mX;
         data->y = data->y + rawData[i].xl.mY;
         data->z = data->z + rawData[i].xl.mZ;
+
         data->roll = data->roll + rawData[i].roll;
         data->pitch = data->pitch + rawData[i].pitch;
         data->yaw = data->yaw + rawData[i].yaw;
+
         data->zRMS = data->zRMS + (rawData[i].xl.mZ * rawData[i].xl.mZ);
+
+        if (rawData[i].xl.mZ < data->zMin) {
+            data->zMin = rawData[i].xl.mZ;
+        }
+        if (rawData[i].xl.mZ > data->zMax) {
+            data->zMax = rawData[i].xl.mZ;
+        }
     }
 
     data->x = data->x / IMU_SAMPLE_RATE;
@@ -205,7 +217,7 @@ int imuMeanData(IMUData rawData[], IMUSendData *data)
     data->zRMS = data->zRMS / IMU_SAMPLE_RATE;
 
     // DEBUG
-    ESP_LOGI(SOFA_FUNC_TAG, "AVERAGE: XL X/Y/Z/ZRMS, %.6f, %.6f, %.6f, %.6f, GYRO X/Y/Z, %.6f, %.6f, %.6f,", data->x, data->y, data->z, data->zRMS, data->roll, data->pitch, data->yaw);
+    // ESP_LOGI(SOFA_FUNC_TAG, "AVERAGE: XL X/Y/Z/ZRMS, %.6f, %.6f, %.6f, %.6f, m:%.6f, M:%.6f, GYRO X/Y/Z, %.6f, %.6f, %.6f,", data->x, data->y, data->z, data->zRMS, data->zMin, data->zMax, data->roll, data->pitch, data->yaw);
 
     return 0;
 }
@@ -222,15 +234,14 @@ int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gy
     // This is awful repetitive code that needs to be split into a few functions. It hurts my eyes.
     uint8_t mxl[7];
     uint8_t mgyro[7];
-    uint8_t mzrms[7];
-    int16_t xa, ya, za, zrms;
+    uint8_t mzxl[7];
+    int16_t xa, ya, za, zrms, zmin, zmax;
     int16_t xg, yg, zg;
 
     // Unscale the XL data
     xa = data->x / ACCEL_SCALE_8;
     mxl[0] = (uint8_t)(xa & 0x00FF);
     mxl[1] = (uint8_t)((xa & 0xFF00) >> 8);
-    // ESP_LOGI(SOFA_FUNC_TAG, "UNSCALE XL, %.6f, %04X, %02X, %02X,", data->x, xa, mxl[1], mxl[0]);
 
     ya = data->y / ACCEL_SCALE_8;
     mxl[2] = (uint8_t)(ya & 0x00FF);
@@ -241,8 +252,16 @@ int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gy
     mxl[5] = (uint8_t)((za & 0xFF00) >> 8);
 
     zrms = data->zRMS / ACCEL_SCALE_8;
-    mzrms[0] = (uint8_t)(zrms & 0x00FF);
-    mzrms[1] = (uint8_t)((zrms & 0xFF00) >> 8);
+    mzxl[0] = (uint8_t)(zrms & 0x00FF);
+    mzxl[1] = (uint8_t)((zrms & 0xFF00) >> 8);
+
+    zmin = data->zMin / ACCEL_SCALE_8;
+    mzxl[2] = (uint8_t)(zmin & 0x00FF);
+    mzxl[3] = (uint8_t)((zmin & 0xFF00) >> 8);
+
+    zmax = data->zMax / ACCEL_SCALE_8;
+    mzxl[4] = (uint8_t)(zmax & 0x00FF);
+    mzxl[5] = (uint8_t)((zmax & 0xFF00) >> 8);
 
     // Unscale the XL data
     xg = data->roll / EULER_ANGLE_SCALE;
@@ -256,7 +275,6 @@ int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gy
     zg = data->yaw / EULER_ANGLE_SCALE;
     mgyro[4] = (uint8_t)(zg & 0x00FF);
     mgyro[5] = (uint8_t)((zg & 0xFF00) >> 8);
-    // ESP_LOGI(SOFA_FUNC_TAG, "UNSCALE GYRO, %.6f, %04X, %02X, %02X,", data->yaw, zg, mgyro[5], mgyro[4]);
 
     // Move XL data into CAN message.
     xlmsg->data[0] = mxl[0];
@@ -277,12 +295,12 @@ int imuCreateCANMsg(IMUSendData *data, twai_message_t *xlmsg, twai_message_t *gy
     gyromsg->data[6] = stat;
 
     // Move rms data into CAN message.
-    rmsmsg->data[0] = mzrms[0];
-    rmsmsg->data[1] = mzrms[1];
-    rmsmsg->data[2] = mzrms[2] = 0;
-    rmsmsg->data[3] = mzrms[3] = 0;
-    rmsmsg->data[4] = mzrms[4] = 0;
-    rmsmsg->data[5] = mzrms[5] = 0;
+    rmsmsg->data[0] = mzxl[0];
+    rmsmsg->data[1] = mzxl[1];
+    rmsmsg->data[2] = mzxl[2];
+    rmsmsg->data[3] = mzxl[3];
+    rmsmsg->data[4] = mzxl[4];
+    rmsmsg->data[5] = mzxl[5];
     rmsmsg->data[6] = stat;
 
     return 0;
@@ -300,8 +318,7 @@ void imuWhoAmI(void)
 
     // Read the WHO_AM_I (0x0F) register to see if we can see the accelerometer.
     // WHO_AM_I returns 0x6C.
-    while (regWhoAmI.rx != WHOAMI)
-    {
+    while (regWhoAmI.rx != WHOAMI) {
         ESP_LOGI(SOFA_FUNC_TAG, "Connecting to accelerometer on I2C bus at address 0x6A.");
         i2cReadReg(&regWhoAmI);
     }
@@ -322,7 +339,7 @@ void imuConfig(void)
         .rx = 0x00,
         .err = ESP_FAIL
     };
-    i2cTransmitReg(&config1);
+    boardFault -= i2cTransmitReg(&config1);
 
     // Config 2
     // CTRL2_G 0x11 Gyroscope control register 2 (R/W)
@@ -332,7 +349,7 @@ void imuConfig(void)
         .rx = 0x00,
         .err = ESP_FAIL
     };
-    i2cTransmitReg(&config2);
+    boardFault -= i2cTransmitReg(&config2);
 
     // Config 3
     // INT1_CTRL 0x0D INT1 pin control register (R/W)
@@ -342,7 +359,7 @@ void imuConfig(void)
         .rx = 0x00,
         .err = ESP_FAIL
     };
-    i2cTransmitReg(&config3);
+    boardFault -= i2cTransmitReg(&config3);
 
     ESP_LOGI(SOFA_FUNC_TAG, "Wrote config to IMU.");
 }
@@ -359,7 +376,7 @@ void imuDisableInt(void)
         .err = ESP_FAIL
     };
 
-    i2cTransmitReg(&config3);
+    boardFault -= i2cTransmitReg(&config3);
 }
 
 uint8_t imuSelfTestA(void)
@@ -392,35 +409,28 @@ uint8_t imuSelfTestA(void)
         .err = ESP_FAIL
     };
 
-    for (int i = 0; i < 10; i++)
-    {
+    for (int i = 0; i < 10; i++) {
         regST1.tx[0] = 0x10 + i;
-        if (regST1.tx[0] == 0x10)
-        {
+        if (regST1.tx[0] == 0x10) {
             regST1.tx[1] = 0x38;
-        }
-        else if (regST1.tx[0] == 0x12)
-        {
+        } else if (regST1.tx[0] == 0x12) {
             regST1.tx[1] = 0x44;
-        }
-        else
-        {
+        } else {
             regST1.tx[1] = 0x00;
         }
         
-        i2cTransmitReg(&regST1);
+        boardFault -= i2cTransmitReg(&regST1);
     }
 
     // Power up, wait 100ms for stable output
     vTaskDelay(pdMS_TO_TICKS(100));
 
     // Read accelerometer data once, discard.
-    imuReadAData(&regSTXL, true);
+    boardFault -= imuReadAData(&regSTXL, true);
 
-    for (int i = 0; i < 5; i++)
-    {
+    for (int i = 0; i < 5; i++) {
         // Read the data
-        imuReadAData(&regSTXL, true);
+        boardFault -= imuReadAData(&regSTXL, true);
         imuScaleData(regSTXL.m, &dataSTXL, ACCEL_SCALE_4);
         // Compute the average of each axis and store in _NOST.
         // Each read add to _NOST, divide by 5 at end.
@@ -445,18 +455,17 @@ uint8_t imuSelfTestA(void)
         .rx = 0x00,
         .err = ESP_FAIL
     };
-    i2cTransmitReg(&regST2);
+    boardFault -= i2cTransmitReg(&regST2);
 
     // Wait 100ms for stable output
     vTaskDelay(pdMS_TO_TICKS(100));
 
     // Read accelerometer data once, discard.
-    imuReadAData(&regSTXL, true);
+    boardFault -= imuReadAData(&regSTXL, true);
 
-    for (int i = 0; i < 5; i++)
-    {
+    for (int i = 0; i < 5; i++) {
         // Read the data
-        imuReadAData(&regSTXL, true);
+        boardFault -= imuReadAData(&regSTXL, true);
         imuScaleData(regSTXL.m, &dataSTXL, ACCEL_SCALE_4);
         // Compute the average of each axis and store in _ST.
         // Each read add to _ST, divide by 5 at end.
@@ -467,6 +476,7 @@ uint8_t imuSelfTestA(void)
         // DEBUG
         ESP_LOGI(SOFA_FUNC_TAG, "_ST %d: %.6f \t %.6f \t %.6f", i, OUTX_ST, OUTY_ST, OUTZ_ST);
     }
+
     // Compute average
     OUTX_ST = OUTX_ST / 5;
     OUTY_ST = OUTY_ST / 5;
@@ -482,37 +492,31 @@ uint8_t imuSelfTestA(void)
 
     // I'm cheating here because I know the min and max are declared as positive, so leave off the abs.
     // X-axis in range
-    if ((range_ST_X >= A_ST_MIN) && (range_ST_X <= A_ST_MAX))
-    {
+    if ((range_ST_X >= A_ST_MIN) && (range_ST_X <= A_ST_MAX)) {
         // Y-axis in range
-        if ((range_ST_Y >= A_ST_MIN) && (range_ST_Y <= A_ST_MAX))
-        {
+        if ((range_ST_Y >= A_ST_MIN) && (range_ST_Y <= A_ST_MAX)) {
             // Z-axis in range
-            if ((range_ST_Z >= A_ST_MIN) && (range_ST_Z <= A_ST_MAX))
-            {
+            if ((range_ST_Z >= A_ST_MIN) && (range_ST_Z <= A_ST_MAX)) {
                 result = 1;
             }
         }
     }
 
-    if (result)
-    {
+    if (result) {
         ESP_LOGI(SOFA_FUNC_TAG, "Accelerometer self-test PASSED.");
-    }
-    else
-    {
+    } else {
         ESP_LOGI(SOFA_FUNC_TAG, "Accelerometer self-test FAILED.");
     }
 
     // Disable self-test
     regST2.tx[0] = 0x14;
     regST2.tx[1] = 0x00;
-    i2cTransmitReg(&regST2);
+    boardFault -= i2cTransmitReg(&regST2);
 
     // Disable sensor, ready for config.
     regST1.tx[0] = 0x10;
     regST1.tx[1] = 0x00;
-    i2cTransmitReg(&regST1);
+    boardFault -= i2cTransmitReg(&regST1);
 
     return result;
 }
@@ -547,35 +551,28 @@ uint8_t imuSelfTestG(void)
         .err = ESP_FAIL
     };
 
-    for (int i = 0; i < 10; i++)
-    {
+    for (int i = 0; i < 10; i++) {
         regST1.tx[0] = 0x10 + i;
-        if (regST1.tx[0] == 0x11)
-        {
+        if (regST1.tx[0] == 0x11) {
             regST1.tx[1] = 0x5C;
-        }
-        else if (regST1.tx[0] == 0x12)
-        {
+        } else if (regST1.tx[0] == 0x12) {
             regST1.tx[1] = 0x44;
-        }
-        else
-        {
+        } else {
             regST1.tx[1] = 0x00;
         }
         
-        i2cTransmitReg(&regST1);
+        boardFault -= i2cTransmitReg(&regST1);
     }
 
     // Power up, wait 100ms for stable output
     vTaskDelay(pdMS_TO_TICKS(100));
 
     // Read gyro data once, discard.
-    imuReadGData(&regSTG, true);
+    boardFault -= imuReadGData(&regSTG, true);
 
-    for (int i = 0; i < 5; i++)
-    {
+    for (int i = 0; i < 5; i++) {
         // Read the data
-        imuReadGData(&regSTG, true);
+        boardFault -= imuReadGData(&regSTG, true);
         imuScaleData(regSTG.m, &dataSTG, GYRO_SCALE_2000);
         // Compute the average of each axis and store in _NOST.
         // Each read add to _NOST, divide by 5 at end.
@@ -586,6 +583,7 @@ uint8_t imuSelfTestG(void)
         // DEBUG
         ESP_LOGI(SOFA_FUNC_TAG, "_NOST %d: %.6f \t %.6f \t %.6f", i, OUTX_NOST, OUTY_NOST, OUTZ_NOST);
     }
+
     // Compute average
     OUTX_NOST = OUTX_NOST / 5;
     OUTY_NOST = OUTY_NOST / 5;
@@ -600,18 +598,17 @@ uint8_t imuSelfTestG(void)
         .rx = 0x00,
         .err = ESP_FAIL
     };
-    i2cTransmitReg(&regST2);
+    boardFault -= i2cTransmitReg(&regST2);
 
     // Wait 100ms for stable output
     vTaskDelay(pdMS_TO_TICKS(100));
 
     // Read accelerometer data once, discard.
-    imuReadGData(&regSTG, true);
+    boardFault -= imuReadGData(&regSTG, true);
 
-    for (int i = 0; i < 5; i++)
-    {
+    for (int i = 0; i < 5; i++) {
         // Read the data
-        imuReadGData(&regSTG, true);
+        boardFault -= imuReadGData(&regSTG, true);
         imuScaleData(regSTG.m, &dataSTG, GYRO_SCALE_2000);
         // Compute the average of each axis and store in _ST.
         // Each read add to _ST, divide by 5 at end.
@@ -622,6 +619,7 @@ uint8_t imuSelfTestG(void)
         // DEBUG 
         ESP_LOGI(SOFA_FUNC_TAG, "_ST %d: %.6f \t %.6f \t %.6f", i, OUTX_ST, OUTY_ST, OUTZ_ST);
     }
+
     // Compute average
     OUTX_ST = OUTX_ST / 5;
     OUTY_ST = OUTY_ST / 5;
@@ -637,37 +635,31 @@ uint8_t imuSelfTestG(void)
 
     // I'm cheating here because I know the min and max are declared as positive, so leave off the abs.
     // X-axis in range
-    if ((range_ST_X >= G_ST_MIN_2000) && (range_ST_X <= G_ST_MAX_2000))
-    {
+    if ((range_ST_X >= G_ST_MIN_2000) && (range_ST_X <= G_ST_MAX_2000)) {
         // Y-axis in range
-        if ((range_ST_Y >= G_ST_MIN_2000) && (range_ST_Y <= G_ST_MAX_2000))
-        {
+        if ((range_ST_Y >= G_ST_MIN_2000) && (range_ST_Y <= G_ST_MAX_2000)) {
             // Z-axis in range
-            if ((range_ST_Z >= G_ST_MIN_2000) && (range_ST_Z <= G_ST_MAX_2000))
-            {
+            if ((range_ST_Z >= G_ST_MIN_2000) && (range_ST_Z <= G_ST_MAX_2000)) {
                 result = 1;
             }
         }
     }
 
-    if (result)
-    {
+    if (result) {
         ESP_LOGI(SOFA_FUNC_TAG, "Gyroscope self-test PASSED.");
-    }
-    else
-    {
+    } else {
         ESP_LOGI(SOFA_FUNC_TAG, "Gyroscope self-test FAILED.");
     }
 
     // Disable self-test
     regST2.tx[0] = 0x14;
     regST2.tx[1] = 0x00;
-    i2cTransmitReg(&regST2);
+    boardFault -= i2cTransmitReg(&regST2);
 
     // Disable sensor, ready for config.
     regST1.tx[0] = 0x11;
     regST1.tx[1] = 0x00;
-    i2cTransmitReg(&regST1);
+    boardFault -= i2cTransmitReg(&regST1);
 
     return result;
 }

@@ -20,17 +20,20 @@ static char *SOFA_FUNC_TAG = "SOFA_DL_FUNC";
 #define IMU_SAMPLE_RATE 104
 #define IMU_SAMPLE_PERIOD 0.009615
 
+// Fault counter
+extern uint32_t boardFault;
+
 // Data ready
 static const uint8_t WHOAMI = 0x6C;
 static const uint8_t XLDA = 0x01;
 static const uint8_t GDA = 0x02;
 
 // Accelerometer data conversion - unused comment out
-static const float ACCEL_SCALE_4 = 0.000122;    // +/-4 LSB value
-static const float ACCEL_SCALE_8 = 0.000244;    // +/-8 LSB value
-// static const float GYRO_SCALE_250 = 0.00875;    // +/- 2500 dps value
-static const float GYRO_SCALE_1000 = 0.035;     // +/- 1000 dps value
-static const float GYRO_SCALE_2000 = 0.070;     // +/- 2000 dps value
+static const float ACCEL_SCALE_4 = 0.000122;        // +/-4 LSB value
+static const float ACCEL_SCALE_8 = 0.000244;        // +/-8 LSB value
+// static const float GYRO_SCALE_250 = 0.00875;     // +/- 2500 dps value
+static const float GYRO_SCALE_1000 = 0.035;         // +/- 1000 dps value
+static const float GYRO_SCALE_2000 = 0.070;         // +/- 2000 dps value
 
 // Self test ranges - unused comment out
 static const float A_ST_MIN = 0.050;
@@ -71,6 +74,8 @@ typedef struct {
     float x, y, z;
     float roll, pitch, yaw;
     float zRMS;
+    float zMin, zMax;
+    
 } IMUSendData;
 
 // Function Prototypes
@@ -82,7 +87,7 @@ int imuReadAData(i2cReadIMUReg *data, bool check);
 int imuReadGData(i2cReadIMUReg *data, bool check);
 int imuScaleData(uint8_t m[], IMUMeasureData *data, float scale);
 int imuFusionAHRS(FusionAhrs *ahrs, IMUData *data, FusionOffset *offset);
-int imuMeanData(IMUData rawData[], IMUSendData *data);
+int imuCalcData(IMUData rawData[], IMUSendData *data);
 int imuCreateCANMsg(IMUSendData *data, twai_message_t *msg, twai_message_t *gyromsg, twai_message_t *rmsmsg, uint8_t stat);
 uint8_t imuSelfTestA(void);
 uint8_t imuSelfTestG(void);

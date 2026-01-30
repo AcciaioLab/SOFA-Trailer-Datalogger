@@ -48,6 +48,9 @@ uint32_t CAN_ID_Gyro = 0xFFFFFFFF;
 uint32_t CAN_ID_RMS = 0xFFFFFFFF;
 uint32_t CAN_ID_TEST = 0xFFFFFFFF;
 
+// Fault counter
+uint32_t boardFault = 0;
+
 // Tasks
 #define TASK_PRIORITY_I2C 5
 #define TASK_PRIORITY_IMU 13
@@ -67,6 +70,8 @@ uint32_t CAN_ID_TEST = 0xFFFFFFFF;
 #define GPIO_IMU_SDOSAO 7 // GPIO used to select i2c device address
 #define GPIO_IMU_CS 15 // GPIO used to enable i2c comms
 #define GPIO_FORCE_ON 17 // GPIO used to force the board on if the voltage drops
+#define GPIO_BLUE_LED 10
+#define GPIO_YELLOW_LED 11
 
 // Device Constants
 static const int STARTUP_DELAY = 15; // Delay time at boot to line up with FMC650
@@ -103,14 +108,12 @@ typedef enum {
 
 uint32_t CAN_ID_ACCEL_DATA = 0xFFFFFFFF;    // Variable to be setup as part of board ID
 uint32_t CAN_ID_GYRO_DATA = 0xFFFFFFFF;     // Variable to be setup as part of board ID
-uint32_t CAN_ID_RMS_DATA = 0xFFFFFFFF;     // Variable to be setup as part of board ID
+uint32_t CAN_ID_RMS_DATA = 0xFFFFFFFF;      // Variable to be setup as part of board ID
 uint32_t CAN_ID_TEST_DATA = 0xFFFFFFFF;     // Variable to be setup as part of board ID
 
 /* 
  * CAN BUS data
  */
-
-// static const twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_GPIO, CAN_RX_GPIO, TWAI_MODE_NORMAL);
 static const twai_general_config_t g_config = {
     .mode = TWAI_MODE_NORMAL,
     .tx_io = CAN_TX_GPIO,
@@ -173,10 +176,8 @@ void taskI2C(void *pvParameters)
     // DEBUG - timing
     // uint64_t tStart = esp_timer_get_time();
 
-    while (1)
-    {
-        if (xQueueReceive(queueIntXL, &gpioNum, portMAX_DELAY))
-        {
+    while (1) {
+        if (xQueueReceive(queueIntXL, &gpioNum, portMAX_DELAY)) {
             // DEBUG - timing
             // uint64_t tEnd = esp_timer_get_time();
             // ESP_LOGI(SOFA_DL_IMU, "Time between interrupt call %.3f ms", ((float)(tEnd-tStart)/1000));
@@ -184,8 +185,8 @@ void taskI2C(void *pvParameters)
             
             // ESP_LOGI(SOFA_DL_I2C, "INTERRUPT RECEIVED on PIN %lu.....", gpioNum);
 
-            imuReadAData(&imuReadDataFrame.xl, false);
-            imuReadGData(&imuReadDataFrame.gyro, true);
+            boardFault -= imuReadAData(&imuReadDataFrame.xl, false);
+            boardFault -= imuReadGData(&imuReadDataFrame.gyro, true);
 
             xQueueSend(queueIMUReadData, &imuReadDataFrame, portMAX_DELAY);
         }
@@ -241,13 +242,19 @@ void taskIMU(void *pvParameters)
     // Loop to read in accelerometer data
     // DEBUG - timing
     uint64_t tOverallStart = esp_timer_get_time();
-    while(1)
-    {
+    while(1) {
         // ESP_LOGI(SOFA_DL_IMU, "IN IMU TASK...");
+
+        if (boardFault > 0) {
+            gpio_set_level(GPIO_YELLOW_LED, 1);
+        } else {
+            gpio_set_level(GPIO_YELLOW_LED, 0);
+        }
+        // ESP_LOGI(SOFA_DL_IMU, "BoardFault: %lu", boardFault);
         
         // 1 - Receive and format the raw data
-        if (xQueueReceive(queueIMUReadData, &bufRead, portMAX_DELAY))
-        {
+        if (xQueueReceive(queueIMUReadData, &bufRead, portMAX_DELAY)) {
+
             // DEBUG - timing
             // uint64_t tStart = esp_timer_get_time();
 
@@ -265,8 +272,7 @@ void taskIMU(void *pvParameters)
 
             // Increment the buffer count to the next position
             bufCount++;
-            if (bufCount > (IMU_SAMPLE_RATE - 1))
-            {
+            if (bufCount > (IMU_SAMPLE_RATE - 1)) {
                 bufCount = 0;
             }
             
@@ -276,17 +282,13 @@ void taskIMU(void *pvParameters)
         }
 
         // When at the end of the samples / sec, calc and send
-        if (bufCount == (IMU_SAMPLE_RATE - 1))
-        {
-            // DEBUG
-            // ESP_LOGI(SOFA_DL_IMU, "IMU data sample buffer full, calc and send.");
-
+        if (bufCount == (IMU_SAMPLE_RATE - 1)) {
             // 4 - More filtering (OPTIONAL at the moment)
             // Nothing now
 
             // 5 - Mean of the values
             IMUSendData imuSend; 
-            imuMeanData(bufIMURawData, &imuSend);
+            imuCalcData(bufIMURawData, &imuSend);
 
             // 6 - Send to FMC, package CAN data
             imuCreateCANMsg(&imuSend, &CAN_Data_Accelerometer, &CAN_Data_Gyro, &CAN_Data_RMS, boardStatus);
@@ -309,8 +311,7 @@ void taskCANRx(void *pvParameters)
 
     twai_message_t received_msg;
 
-    while (1)
-    {
+    while (1) {
         /// DEBUG - sniff the canbus
         // if (twai_receive(&received_msg, portMAX_DELAY) == ESP_OK)
         // {
@@ -322,8 +323,7 @@ void taskCANRx(void *pvParameters)
         xQueueReceive(CAN_rx_queue, &actions, portMAX_DELAY);
 
         // Check what action was required.
-        if (actions == CAN_RX_RTR_LISTEN)
-        {
+        if (actions == CAN_RX_RTR_LISTEN) {
             // This is template code for if receiving is required.
             // FMC will only listen for messages from SOFA DL.
             xSemaphoreTake(SEM_CAN_Control, portMAX_DELAY);
@@ -335,8 +335,7 @@ void taskCANRx(void *pvParameters)
 
             // twai_message_t received_msg;
 
-            while (1)
-            {
+            while (1) {
                 // Waiting to receive request
                 ESP_LOGI(CAN_ACCEL_TAG, "CANBUS receive task waiting to receive request for data.");
                 esp_err_t err_rxrtr = twai_receive(&received_msg, portMAX_DELAY);
@@ -354,23 +353,32 @@ void taskCANTx(void *pvParameters)
 {
     ESP_LOGI(CAN_ACCEL_TAG, "CANBUS transmit task started.");
 
-    while (1)
-    {
+    while (1) {
         // Read the queue to see if a transmit action is required.
         CAN_control_actions actions;
         xQueueReceive(CAN_tx_queue, &actions, portMAX_DELAY);
 
         // Check what action was required.
-        if (actions == CAN_TX_MSG)
-        {
+        if (actions == CAN_TX_MSG) {
             // Take control and send the data
             xSemaphoreTake(SEM_CAN_Control, portMAX_DELAY);
+
+            gpio_set_level(GPIO_BLUE_LED, 0);
+
             ESP_LOGI(CAN_ACCEL_TAG, "CANBUS transmit task received action CAN_TX_MSG %d.", actions);
 
-            twai_transmit(&CAN_Data_Accelerometer, portMAX_DELAY);
-            twai_transmit(&CAN_Data_Gyro, portMAX_DELAY);
-            twai_transmit(&CAN_Data_RMS, portMAX_DELAY);
-            twai_transmit(&CAN_TEST, portMAX_DELAY);
+            if (twai_transmit(&CAN_Data_Accelerometer, portMAX_DELAY) != ESP_OK) {
+                boardFault++;
+            }
+            if (twai_transmit(&CAN_Data_Gyro, portMAX_DELAY) != ESP_OK) {
+                boardFault++;
+            }
+            if (twai_transmit(&CAN_Data_RMS, portMAX_DELAY) != ESP_OK) {
+                boardFault++;
+            }
+            if (twai_transmit(&CAN_TEST, portMAX_DELAY) != ESP_OK) {
+                boardFault++;
+            }
             // if (err != ESP_OK)
             // {
             //     ESP_LOGI(CAN_ACCEL_TAG, "ERROR SENDING CAN...!!!!!!!!");
@@ -401,6 +409,8 @@ void taskCANTx(void *pvParameters)
 
             ESP_LOGI(CAN_ACCEL_TAG, "CANBUS transmit task sent accelerometer and gyro data.");
 
+            gpio_set_level(GPIO_BLUE_LED, 1);
+
             xSemaphoreGive(SEM_CAN_Control);
         }
         
@@ -421,11 +431,9 @@ void taskCANCtrl(void *pvParameters)
 
     CAN_control_actions actions = CAN_INIT;
 
-    while(1)
-    {
+    while (1) {
         // Run through the CAN control state machine        
-        switch (actions)
-        {
+        switch (actions) {
             case CAN_INIT:
                 // CAN started, perform first actions
                 actions = CAN_CTRL_IDLE;
@@ -477,17 +485,20 @@ void taskCANCtrl(void *pvParameters)
 
 void app_main(void)
 {
-    // Delay the start of the device to line up with the FMC650
-    for (int i = STARTUP_DELAY; i > 0; i--)
-    {
-        ESP_LOGI(SOFA_DL_SYS, "Device starting in %d", i);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-
     // Configure the GPIOs
     configureGPIO();
 
     setSystemGPIO();
+
+    // Turn ON LEDs during boot
+    gpio_set_level(GPIO_BLUE_LED, 1);
+    gpio_set_level(GPIO_YELLOW_LED, 1);
+
+    // Delay the start of the device to line up with the FMC650
+    for (int i = STARTUP_DELAY; i > 0; i--) {
+        ESP_LOGI(SOFA_DL_SYS, "Device starting in %d", i);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 
     // Read and set this board's ID
     IDInit();
@@ -535,6 +546,10 @@ void app_main(void)
     xSemaphoreGive(SEM_CAN_Control);
     xSemaphoreGive(SEM_Done);
 
+    // Turn OFF LEDs after boot
+    gpio_set_level(GPIO_BLUE_LED, 0);
+    gpio_set_level(GPIO_YELLOW_LED, 0);
+
     vTaskDelay(pdMS_TO_TICKS(5000));
 
     xSemaphoreTake(SEM_Done, portMAX_DELAY);
@@ -571,7 +586,7 @@ int configureGPIO(void)
     gpio_config_t gpioOutputConfig = {};
     gpioOutputConfig.intr_type = GPIO_INTR_DISABLE;
     gpioOutputConfig.mode = GPIO_MODE_OUTPUT;
-    gpioOutputConfig.pin_bit_mask = (1ULL << GPIO_IMU_SDOSAO) | (1ULL << GPIO_IMU_CS) | (1ULL << GPIO_FORCE_ON);
+    gpioOutputConfig.pin_bit_mask = (1ULL << GPIO_IMU_SDOSAO) | (1ULL << GPIO_IMU_CS) | (1ULL << GPIO_FORCE_ON) | (1ULL << GPIO_BLUE_LED) | (1ULL << GPIO_YELLOW_LED);
     gpioOutputConfig.pull_down_en = 0;
     gpioOutputConfig.pull_up_en = 1;
     gpio_config(&gpioOutputConfig);
@@ -609,8 +624,7 @@ int IDInit(void)
     jumper = (4 * jumper1) + (2 * jumper2) + (1 * jumper3);
 
     // Based on the jumpers set, set the board ID.
-    switch(jumper)
-    {
+    switch (jumper) {
         case 0:
             // SPECIAL
             SOFA_DL_ID = BID_SPECIAL;
